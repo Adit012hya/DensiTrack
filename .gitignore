@@ -1,0 +1,9 @@
+*.zip
+__pycache__/
+*.mp4
+*.pt
+*.toml
+mkdocs.yml
+.vscode/
+.gradio/.venv/
+.venv*/

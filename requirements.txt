@@ -1,0 +1,13 @@
+torch==2.5.1
+torchvision==0.20.1
+streamlit==1.45.0
+gradio>=5.0.0
+opencv-contrib-python==4.11.0.86
+numpy==1.26.4
+mediapipe==0.10.21
+pillow==11.2.1
+matplotlib
+pyyaml
+tqdm
+psutil
+py-cpuinfo
