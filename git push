@@ -1,0 +1,220 @@
+warning: in the working copy of 'app.py', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/app.py b/app.py[m
+[1mindex d890779..72e01d9 100644[m
+[1m--- a/app.py[m
+[1m+++ b/app.py[m
+[36m@@ -13,7 +13,7 @@[m [mfrom ultralytics import YOLO[m
+ from ultralytics.solutions.heatmap import Heatmap[m
+ [m
+ [m
+[31m-def resolve_gradio_port(preferred_port=7860, max_port=7869):[m
+[32m+[m[32mdef resolve_gradio_port(preferred_port=7860, max_port=7899):[m
+     """Find the first free local port in a small range so the app can launch even when 7860 is busy."""[m
+     for port in range(preferred_port, max_port + 1):[m
+         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:[m
+[36m@@ -137,10 +137,10 @@[m [mdef model_selector_options():[m
+     return "\n".join(options)[m
+ [m
+ def build_human_warning(count):[m
+[31m-    if count >= 8:[m
+[32m+[m[32m    if count > 50:[m
+         return "CRITICAL: crowd surge detected", "danger"[m
+[31m-    if count >= 5:[m
+[31m-        return "WARNING: dense human flow detected", "warning"[m
+[32m+[m[32m    if count > 30:[m
+[32m+[m[32m        return "WARNING: crowding detected", "warning"[m
+     if count >= 2:[m
+         return "CAUTION: elevated human activity", "warning"[m
+     return "NORMAL: safe human density", "ok"[m
+[36m@@ -155,9 +155,9 @@[m [mdef _predict_person_boxes(frame_bgr, model_id, conf_threshold=0.08, max_det=500)[m
+         conf=conf_threshold,[m
+         classes=[0],[m
+         max_det=max_det,[m
+[31m-        iou=0.45,[m
+[32m+[m[32m        iou=0.55,[m
+         verbose=False,[m
+[31m-        augment=True,[m
+[32m+[m[32m        augment=False,[m
+     )[m
+ [m
+     centroids = [][m
+[36m@@ -280,7 +280,7 @@[m [mdef predict_frame_base64(frame_b64: str, model_id: str) -> str:[m
+     for candidate in candidates:[m
+         try:[m
+             centroids, boxes = _predict_person_boxes([m
+[31m-                frame_bgr, candidate, conf_threshold=0.04, max_det=500[m
+[32m+[m[32m                frame_bgr, candidate, conf_threshold=0.12, max_det=500[m
+             )[m
+         except Exception as exc:[m
+             inference_errors.append(f"{os.path.basename(candidate)}: {exc}")[m
+[36m@@ -629,7 +629,7 @@[m [mdef render_camera_detail_full_html(cam=None, alerts=None):[m
+         </div>[m
+ [m
+         <div id="media-upload-bar" style="display: none; align-items: center; gap: 8px; margin-top: 10px; width: 100%; justify-content: flex-end; flex-wrap: wrap;">[m
+[31m-            <input id="media-upload-input" type="file" accept="video/*" style="display: none;" />[m
+[32m+[m[32m            <input id="media-upload-input" type="file" accept="video/*,image/*" style="display: none;" />[m
+             <button id="media-upload-btn" onclick="triggerMediaUpload()" style="background: linear-gradient(135deg, #0072f5, #2563eb); color: #ffffff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 11px; font-weight: 700; cursor: pointer;">Upload Video</button>[m
+             <button id="media-remove-btn" onclick="removeUploadedMedia()" style="display: none; background: linear-gradient(135deg, #7f1d1d, #991b1b); color: #ffffff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 11px; font-weight: 700; cursor: pointer;">✕ Remove Video</button>[m
+             <button id="media-analyze-btn" onclick="startUploadedMediaAnalysisLoop()" style="display: none; background: linear-gradient(135deg, #16a34a, #15803d); color: #ffffff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 11px; font-weight: 700; cursor: pointer;">▶ Analyse Video</button>[m
+[36m@@ -1397,6 +1397,48 @@[m [mHEAD_JS = """[m
+ window.cctvGlobalStream = null;[m
+ window.selectedModelId = 'yolo11n.pt';[m
+ window.currentActiveCamId = 'CAM-01';[m
+[32m+[m[32mwindow.uploadedMediaByCam = {};[m
+[32m+[m[32mwindow._opticalLiveCamId = null;[m
+[32m+[m[32mwindow.cameraDashboardData = {};[m
+[32m+[m[32mwindow.activeOvercrowdingAlerts = {};[m
+[32m+[m[32mwindow.alertThresholds = { crowding: 30, overcrowding: 50 };[m
+[32m+[m[32mtry {[m
+[32m+[m[32m    const storedThresholds = JSON.parse(localStorage.getItem('densitrack-alert-thresholds') || '{}');[m
+[32m+[m[32m    if (Number.isFinite(storedThresholds.crowding) && Number.isFinite(storedThresholds.overcrowding) && storedThresholds.overcrowding > storedThresholds.crowding) window.alertThresholds = storedThresholds;[m
+[32m+[m[32m} catch (_) {}[m
+[32m+[m[32mfunction isCrowdingCount(count) { return Number(count) > window.alertThresholds.crowding; }[m
+[32m+[m[32mfunction isOvercrowdingCount(count) { return Number(count) > window.alertThresholds.overcrowding; }[m
+[32m+[m[32mfunction alertBandForCount(count) { return isOvercrowdingCount(count) ? 'OVERCROWDING' : isCrowdingCount(count) ? 'CROWDING' : Number(count) > 0 ? 'ELEVATED' : 'NORMAL'; }[m
+[32m+[m[32mfunction warningForCount(count) {[m
+[32m+[m[32m    if (isOvercrowdingCount(count)) return ['CRITICAL: overcrowding detected','danger'];[m
+[32m+[m[32m    if (isCrowdingCount(count)) return ['WARNING: crowding detected','warning'];[m
+[32m+[m[32m    if (Number(count) >= 2) return ['CAUTION: elevated human activity','warning'];[m
+[32m+[m[32m    return ['NORMAL: safe human density','ok'];[m
+[32m+[m[32m}[m
+[32m+[m[32mfunction saveAlertThresholds(crowdingValue, overcrowdingValue) {[m
+[32m+[m[32m    let crowding = Math.max(1, Math.min(148, Number(crowdingValue) || 30));[m
+[32m+[m[32m    let overcrowding = Math.max(crowding + 1, Math.min(150, Number(overcrowdingValue) || 50));[m
+[32m+[m[32m    window.alertThresholds = { crowding, overcrowding };[m
+[32m+[m[32m    try { localStorage.setItem('densitrack-alert-thresholds', JSON.stringify(window.alertThresholds)); } catch (_) {}[m
+[32m+[m[32m    const crowdSlider = document.getElementById('settings-crowding-threshold');[m
+[32m+[m[32m    const overSlider = document.getElementById('settings-overcrowding-threshold');[m
+[32m+[m[32m    if (crowdSlider) crowdSlider.value = crowding;[m
+[32m+[m[32m    if (overSlider) overSlider.value = overcrowding;[m
+[32m+[m[32m    const crowdLabel = document.getElementById('settings-crowding-value');[m
+[32m+[m[32m    const overLabel = document.getElementById('settings-overcrowding-value');[m
+[32m+[m[32m    if (crowdLabel) crowdLabel.textContent = `Above ${crowding} people`;[m
+[32m+[m[32m    if (overLabel) overLabel.textContent = `Above ${overcrowding} people`;[m
+[32m+[m[32m    refreshDashboardAlertStates();[m
+[32m+[m[32m    renderAllDashboardCameraTiles();[m
+[32m+[m[32m}[m
+[32m+[m[32mfunction initializeSettingsPage() {[m
+[32m+[m[32m    const crowdSlider = document.getElementById('settings-crowding-threshold');[m
+[32m+[m[32m    const overSlider = document.getElementById('settings-overcrowding-threshold');[m
+[32m+[m[32m    if (!crowdSlider || !overSlider) return;[m
+[32m+[m[32m    crowdSlider.value = window.alertThresholds.crowding;[m
+[32m+[m[32m    overSlider.value = window.alertThresholds.overcrowding;[m
+[32m+[m[32m    saveAlertThresholds(crowdSlider.value, overSlider.value);[m
+[32m+[m[32m}[m
+ window.analyzedPersonCentroids = [];[m
+ window.heatmapAnalysisComplete = false;[m
+ window.isAnalyzingFeed = false;[m
+[36m@@ -1698,6 +1740,9 @@[m [mfunction startOpticalLiveCamera() {[m
+         video.play().catch(() => {});[m
+         video.style.display = 'none';[m
+         window._opticalLiveActive = true;[m
+[32m+[m[32m        window._opticalLiveCamId = 'CAM-02';[m
+[32m+[m[32m        const liveBadge = document.getElementById('cam02-live-badge');[m
+[32m+[m[32m        if (liveBadge) { liveBadge.innerText = 'LIVE • STREAMING'; liveBadge.style.color = '#22c55e'; }[m
+         if (metric) metric.innerText = '● LIVE CAMERA • ANALYZED PERSONS: 0';[m
+         runOpticalCanvasAnimation();[m
+         startLivePersonAnalysisLoop();[m
+[36m@@ -1861,11 +1906,11 @@[m [mfunction showAnalysisError(error) {[m
+ }[m
+ [m
+ // ─── Zone grid helpers ───────────────────────────────────────────────────────[m
+[31m-const ZONE_OVERCROWD_THRESHOLD = 8; // only dense zones should be critical[m
+[32m+[m[32mconst ZONE_OVERCROWD_THRESHOLD = 51; // more than 50 people in one zone[m
+ [m
+ function _zoneColorForCount(n) {[m
+[31m-    if (n >= ZONE_OVERCROWD_THRESHOLD) return { fill: 'rgba(239,68,68,0.14)', stroke: '#ef4444', label: '#fca5a5' };[m
+[31m-    if (n >= 4) return { fill: 'rgba(249,115,22,0.12)', stroke: '#f97316', label: '#fdba74' };[m
+[32m+[m[32m    if (isOvercrowdingCount(n)) return { fill: 'rgba(239,68,68,0.14)', stroke: '#ef4444', label: '#fca5a5' };[m
+[32m+[m[32m    if (isCrowdingCount(n)) return { fill: 'rgba(249,115,22,0.12)', stroke: '#f97316', label: '#fdba74' };[m
+     if (n >= 2) return { fill: 'rgba(234,179,8,0.10)', stroke: '#eab308', label: '#fde047' };[m
+     if (n === 1) return { fill: 'rgba(59,130,246,0.10)', stroke: '#3b82f6', label: '#93c5fd' };[m
+     return { fill: 'rgba(34,197,94,0.05)', stroke: 'rgba(161,161,170,0.55)', label: '#d4d4d8' };[m
+[36m@@ -1894,8 +1939,8 @@[m [mfunction drawZoneGridOnCanvas(ctx, w, h, zoneCounts, centroids) {[m
+             const py = p.y * scaleY;[m
+             const r  = (p.radius || 40) * Math.min(scaleX, scaleY) * 1.4;[m
+             const localCount = centroids.filter(other => Math.hypot(other.x - p.x, other.y - p.y) < 80).length;[m
+[31m-            const hot = localCount >= 8 ? [239,68,68][m
+[31m-                : localCount >= 4 ? [249,115,22][m
+[32m+[m[32m            const hot = isOvercrowdingCount(localCount) ? [239,68,68][m
+[32m+[m[32m                : isCrowdingCount(localCount) ? [249,115,22][m
+                 : localCount >= 2 ? [234,179,8][m
+                 : [59,130,246];[m
+             const grad = ctx.createRadialGradient(px, py, 0, px, py, r);[m
+[36m@@ -2033,7 +2078,7 @@[m [mfunction renderUploadedMediaToCanvas() {[m
+     ctx.fillStyle = '#000000';[m
+     ctx.fillRect(0, 0, canvas.width, canvas.height);[m
+ [m
+[31m-    if (!state && window._opticalLiveActive) {[m
+[32m+[m[32m    if (!state && window._opticalLiveActive && window.currentActiveCamId === window._opticalLiveCamId) {[m
+         const liveVideo = document.getElementById('optical-live-video');[m
+         if (liveVideo && liveVideo.readyState >= 2 && liveVideo.videoWidth) {[m
+             ctx.drawImage(liveVideo, 0, 0, canvas.width, canvas.height);[m
+[36m@@ -2092,7 +2137,7 @@[m [mfunction drawUploadedDetectionOverlay(boxes, zoneCounts, centroids) {[m
+                 const oy = (Number(other.y1) + Number(other.y2)) * canvas.height / 2;[m
+                 return Math.hypot(ox - cx, oy - cy) < Math.min(canvas.width, canvas.height) * 0.2;[m
+             }).length;[m
+[31m-            const dotColor = localDensity >= 4 ? '#ef4444' : localDensity >= 2 ? '#fb923c' : '#fde047';[m
+[32m+[m[32m            const dotColor = isOvercrowdingCount(localDensity) ? '#ef4444' : isCrowdingCount(localDensity) ? '#f97316' : localDensity >= 2 ? '#eab308' : '#3b82f6';[m
+             ctx.beginPath();[m
+             ctx.arc(cx, cy, 7, 0, Math.PI * 2);[m
+             ctx.fillStyle = dotColor;[m
+[36m@@ -2108,6 +2153,127 @@[m [mfunction drawUploadedDetectionOverlay(boxes, zoneCounts, centroids) {[m
+     ctx.restore();[m
+ }[m
+ [m
+[32m+[m[32m// Dashboard wall keeps each camera's own footage and latest detection overlay visible.[m
+[32m+[m[32mfunction renderDashboardCameraTile(camId) {[m
+[32m+[m[32m    const canvas = document.getElementById(`dashboard-camera-canvas-${camId}`);[m
+[32m+[m[32m    if (!canvas) return;[m
+[32m+[m[32m    const ctx = canvas.getContext('2d');[m
+[32m+[m[32m    if (!ctx) return;[m
+[32m+[m[32m    const state = window.uploadedMediaByCam[camId] || (window.uploadedMediaState && window.uploadedMediaState.camId === camId ? window.uploadedMediaState : null);[m
+[32m+[m[32m    let video = null;[m
+[32m+[m[32m    if (state && state.type === 'video') video = state.videoEl;[m
+[32m+[m[32m    else if (camId === 'CAM-01') {[m
+[32m+[m[32m        const feeds = [document.getElementById('cctv-live-video'), document.getElementById('cam-detail-video')];[m
+[32m+[m[32m        video = feeds.find(v => v && v.readyState >= 2 && v.videoWidth) || feeds.find(Boolean);[m
+[32m+[m[32m    }[m
+[32m+[m[32m    else if (camId === 'CAM-02' && window._opticalLiveCamId === camId) video = document.getElementById('optical-live-video');[m
+[32m+[m[32m    const image = state && state.type === 'image' ? state.imgEl : null;[m
+[32m+[m[32m    ctx.clearRect(0, 0, canvas.width, canvas.height);[m
+[32m+[m[32m    ctx.fillStyle = '#08090d'; ctx.fillRect(0, 0, canvas.width, canvas.height);[m
+[32m+[m[32m    let hasFeed = false;[m
+[32m+[m[32m    if (video && video.readyState >= 2 && video.videoWidth) {[m
+[32m+[m[32m        ctx.drawImage(video, 0, 0, canvas.width, canvas.height); hasFeed = true;[m
+[32m+[m[32m    } else if (image && image.complete && image.naturalWidth) {[m
+[32m+[m[32m        ctx.drawImage(image, 0, 0, canvas.width, canvas.height); hasFeed = true;[m
+[32m+[m[32m    }[m
+[32m+[m[32m    const data = window.cameraDashboardData[camId];[m
+[32m+[m[32m    if (data && data.boxes) {[m
+[32m+[m[32m        data.boxes.forEach((b, i) => {[m
+[32m+[m[32m            const x = Number(b.x1 || 0) * canvas.width, y = Number(b.y1 || 0) * canvas.height;[m
+[32m+[m[32m            const w = (Number(b.x2 || 0) - Number(b.x1 || 0)) * canvas.width;[m
+[32m+[m[32m            const h = (Number(b.y2 || 0) - Number(b.y1 || 0)) * canvas.height;[m
+[32m+[m[32m            const cx = x + w / 2, cy = y + h / 2;[m
+[32m+[m[32m            const near = data.boxes.filter(o => Math.hypot(((Number(o.x1)+Number(o.x2))/2)*canvas.width-cx, ((Number(o.y1)+Number(o.y2))/2)*canvas.height-cy) < Math.min(canvas.width,canvas.height)*0.22).length;[m
+[32m+[m[32m            const color = isOvercrowdingCount(near) ? '#ef4444' : isCrowdingCount(near) ? '#f97316' : near >= 2 ? '#eab308' : '#3b82f6';[m
+[32m+[m[32m            const radius = Math.max(12, Math.min(32, h * 0.45));[m
+[32m+[m[32m            const grad = ctx.createRadialGradient(cx,cy,1,cx,cy,radius*2.2);[m
+[32m+[m[32m            grad.addColorStop(0, color+'cc'); grad.addColorStop(0.55,color+'66'); grad.addColorStop(1,color+'00');[m
+[32m+[m[32m            ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(cx,cy,radius*2.2,0,Math.PI*2); ctx.fill();[m
+[32m+[m[32m            ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.strokeRect(x,y,w,h);[m
+[32m+[m[32m            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx,cy,3.2,0,Math.PI*2); ctx.fill();[m
+[32m+[m[32m            ctx.fillStyle = '#fff'; ctx.font = '10px monospace'; ctx.fillText(`P${i+1}`,x,Math.max(11,y-3));[m
+[32m+[m[32m        });[m
+[32m+[m[32m    }[m
+[32m+[m[32m    const placeholder = document.getElementById(`dashboard-camera-placeholder-${camId}`);[m
+[32m+[m[32m    if (placeholder) placeholder.style.display = hasFeed ? 'none' : 'flex';[m
+[32m+[m[32m    const count = document.getElementById(`dashboard-camera-count-${camId}`);[m
+[32m+[m[32m    const label = document.getElementById(`dashboard-camera-density-${camId}`);[m
+[32m+[m[32m    const liveBadge = document.getElementById(`cam${camId.slice(-2)}-live-badge`);[m
+[32m+[m[32m    if (count) count.textContent = data ? `${data.count || 0} PEOPLE` : '0 PEOPLE';[m
+[32m+[m[32m    if (liveBadge && camId !== 'CAM-01') {[m
+[32m+[m[32m        liveBadge.textContent = hasFeed ? (state ? (state.type === 'image' ? 'IMAGE LOADED' : 'VIDEO LOADED') : 'LIVE') : 'STANDBY';[m
+[32m+[m[32m        liveBadge.style.color = hasFeed ? '#22c55e' : '#71717a';[m
+[32m+[m[32m    }[m
+[32m+[m[32m    if (label) {[m
+[32m+[m[32m        const n = data ? data.count || 0 : 0;[m
+[32m+[m[32m        label.textContent = isOvercrowdingCount(n) ? 'OVERCROWDING' : isCrowdingCount(n) ? 'CROWDING' : n ? 'DETECTED' : (hasFeed ? 'MONITORING' : 'STANDBY');[m
+[32m+[m[32m        label.style.color = isO
