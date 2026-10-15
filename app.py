@@ -2160,7 +2160,7 @@ function renderExtraDashboardTiles() {
     if (!host) return;
     const builtIn = new Set(['CAM-01','CAM-02','CAM-03','CAM-04']);
     const extra = Object.values(window.cctvCameraRegistry || {}).filter(camera => !builtIn.has(camera.id)).sort((a,b) => String(a.name).localeCompare(String(b.name)));
-    host.innerHTML = extra.length ? `<div style="font-size:13px;font-weight:700;color:#fff;margin:16px 4px 8px">Additional Camera Feeds</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px">${extra.map(camera => `<div class="cctv-quad-card"><div class="cctv-quad-header" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><span>${escapeDispatchText(camera.name)}</span><span style="color:#a1a1aa;font-size:10px">${escapeDispatchText(camera.id)}</span></div><div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><canvas id="dashboard-camera-canvas-${escapeDispatchText(camera.id)}" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-${escapeDispatchText(camera.id)}" class="dashboard-camera-placeholder"><b>${escapeDispatchText(camera.id)} FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-${escapeDispatchText(camera.id)}">0 PEOPLE</span></div></div></div>`).join('')}</div>` : '';
+    host.innerHTML = extra.length ? `<div style="font-size:13px;font-weight:700;color:#fff;margin:16px 4px 8px">Additional Camera Feeds</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px">${extra.map(camera => `<div class="cctv-quad-card" style="position:relative"><button onclick="event.stopPropagation();deleteCameraById('${escapeDispatchText(camera.id)}')" title="Delete ${escapeDispatchText(camera.name)}" style="position:absolute;right:8px;top:8px;z-index:4;background:#7f1d1d;color:#fff;border:1px solid #b91c1c;border-radius:6px;padding:4px 8px;font-size:10px;font-weight:700;cursor:pointer">Delete camera</button><div class="cctv-quad-header" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><span style="padding-right:82px">${escapeDispatchText(camera.name)}</span><span style="color:#a1a1aa;font-size:10px">${escapeDispatchText(camera.id)}</span></div><div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><canvas id="dashboard-camera-canvas-${escapeDispatchText(camera.id)}" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-${escapeDispatchText(camera.id)}" class="dashboard-camera-placeholder"><b>${escapeDispatchText(camera.id)} FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-${escapeDispatchText(camera.id)}">0 PEOPLE</span></div></div></div>`).join('')}</div>` : '';
 }
 function syncCameraRegistryFromPython(rawValue) {
     try {
@@ -2922,15 +2922,37 @@ function renderNotificationPanel() {
         <div style="font-size:10px;color:#a1a1aa;margin-top:4px">Open this camera zone</div>
       </button>`).join('') : '<div style="padding:18px 12px;text-align:center;color:#a1a1aa;font-size:12px;border:1px dashed #333;border-radius:10px">No active overcrowding alerts.</div>';
 }
-function toggleAlertDrawer() {
+window.toggleAlertDrawer = function() {
     const drawer = document.getElementById('overcrowding-alert-drawer');
-    if (!drawer) return;
+    if (!drawer) { console.error('Notification panel is missing from the page'); return; }
+    if (drawer.parentElement !== document.body) document.body.appendChild(drawer);
     drawer.style.display = drawer.style.display === 'block' ? 'none' : 'block';
     renderNotificationPanel();
-}
-function closeAlertDrawer() {
+};
+window.closeAlertDrawer = function() {
     const drawer = document.getElementById('overcrowding-alert-drawer');
     if (drawer) drawer.style.display = 'none';
+};
+function deleteCameraById(camId) {
+    const root = document.getElementById('delete-camera-select');
+    const button = document.querySelector('#delete-camera-button button');
+    if (!root || !button) { console.error('Camera delete control is unavailable'); return; }
+    const choice = Array.from(root.querySelectorAll('[role="option"]')).find(option => option.textContent.trim().startsWith(`${camId} -`));
+    if (choice) { choice.click(); setTimeout(() => button.click(), 80); return; }
+    const select = root.querySelector('select');
+    if (select) {
+        const option = Array.from(select.options).find(item => item.value.startsWith(`${camId} -`));
+        if (option) { select.value = option.value; select.dispatchEvent(new Event('input', {bubbles:true})); select.dispatchEvent(new Event('change', {bubbles:true})); setTimeout(() => button.click(), 80); return; }
+    }
+    const input = root.querySelector('input');
+    if (input) {
+        input.focus(); input.value = camId;
+        input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:camId}));
+        setTimeout(() => {
+            const option = Array.from(document.querySelectorAll('[role="option"]')).find(item => item.textContent.trim().startsWith(`${camId} -`));
+            if (option) { option.click(); setTimeout(() => button.click(), 80); }
+        }, 120);
+    }
 }
 document.addEventListener('change', event => {
     if (event.target && event.target.closest && event.target.closest('#dispatch-camera-select')) renderDispatchZoneDetails(getDispatchSelectedValue());
@@ -2961,8 +2983,6 @@ function handleGlowNav(target) {
 window.addEventListener('DOMContentLoaded', () => { 
     const uploadInput = document.getElementById('media-upload-input');
     if (uploadInput) uploadInput.onchange = handleUploadedMediaSelection;
-    const drawer = document.getElementById('overcrowding-alert-drawer');
-    if (drawer) document.body.appendChild(drawer);
     startDashboardPreviewLoop();
     renderPersonnelList();
     // DO NOT auto-start webcam — requires Start Recording button
@@ -2970,8 +2990,6 @@ window.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('load', () => { 
     const uploadInput = document.getElementById('media-upload-input');
     if (uploadInput) uploadInput.onchange = handleUploadedMediaSelection;
-    const drawer = document.getElementById('overcrowding-alert-drawer');
-    if (drawer && drawer.parentElement !== document.body) document.body.appendChild(drawer);
     startDashboardPreviewLoop();
     renderPersonnelList();
 });
@@ -3312,6 +3330,14 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
       <span id="alert-bell-count" style="display:none;position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;border-radius:9px;background:#ef4444;color:white;font:10px sans-serif;align-items:center;justify-content:center;padding:0 4px">0</span>
     </button>
     """)
+    gr.HTML("""
+    <div id="overcrowding-alert-drawer" style="display:none;position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.42)" onclick="if(event.target===this)closeAlertDrawer()">
+      <aside style="position:absolute;right:0;top:0;width:25vw;min-width:320px;max-width:460px;height:100%;box-sizing:border-box;background:#111116;border-left:1px solid #2a2a34;padding:20px;overflow:auto;box-shadow:-18px 0 50px #0009">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 18px"><div><div style="font-size:17px;font-weight:700;color:#fff">Notifications</div><div style="font-size:11px;color:#a1a1aa;margin-top:4px">Crowding alerts by camera zone</div></div><button onclick="closeAlertDrawer()" style="background:#22222a;color:white;border:1px solid #383842;border-radius:6px;padding:5px 9px;cursor:pointer">Close</button></div>
+        <div id="overcrowding-alert-list"></div>
+      </aside>
+    </div>
+    """)
 
     # Hidden JS-to-Python Bridge Inputs for Page Switching
     hidden_selected_cam = gr.Textbox(elem_id="selected-cam-input", visible=False)
@@ -3323,14 +3349,6 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
     # PAGE 1: HOME — CCTV Wall & Surveillance Command Center
     # =========================================================
     with gr.Column(visible=True, elem_classes=["visuvate-canvas"], elem_id="home-page-container") as home_view:
-        gr.HTML("""
-        <div id="overcrowding-alert-drawer" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.34)" onclick="if(event.target===this)closeAlertDrawer()">
-          <aside style="position:absolute;right:0;top:0;width:25vw;min-width:300px;max-width:440px;height:100%;box-sizing:border-box;background:#111116;border-left:1px solid #2a2a34;padding:20px;overflow:auto;box-shadow:-18px 0 50px #0008">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 18px"><div><div style="font-size:17px;font-weight:700;color:#fff">Notifications</div><div style="font-size:11px;color:#a1a1aa;margin-top:4px">Crowding alerts by camera zone</div></div><button onclick="closeAlertDrawer()" style="background:#22222a;color:white;border:1px solid #383842;border-radius:6px;padding:5px 9px;cursor:pointer">Close</button></div>
-            <div id="overcrowding-alert-list"></div>
-          </aside>
-        </div>
-        """)
         with gr.Row():
             # -------------------------------------------------
             # LEFT COLUMN: Camera Directory (Sidebar)
@@ -3361,8 +3379,8 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                     )
                     add_cam_btn = gr.Button("Add Camera to Canvas", variant="primary", elem_classes=["btn-visuvate-filter"])
                     add_cam_status = gr.Markdown(value="", visible=True)
-                    delete_cam_select = gr.Dropdown(label="Camera to remove", choices=[f"{c['id']} - {c['name']}" for c in INITIAL_CAMERAS], value=f"{INITIAL_CAMERAS[0]['id']} - {INITIAL_CAMERAS[0]['name']}")
-                    delete_cam_btn = gr.Button("Delete Selected Camera", variant="stop")
+                    delete_cam_select = gr.Dropdown(label="Camera to remove", choices=[f"{c['id']} - {c['name']}" for c in INITIAL_CAMERAS], value=f"{INITIAL_CAMERAS[0]['id']} - {INITIAL_CAMERAS[0]['name']}", elem_id="delete-camera-select")
+                    delete_cam_btn = gr.Button("Delete Selected Camera", variant="stop", elem_id="delete-camera-button")
 
             # -------------------------------------------------
             # CENTER / RIGHT: Compact CCTV Canvas Wall (Square Quad Grid)
