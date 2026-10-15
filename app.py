@@ -1390,6 +1390,10 @@ a[href*="huggingface.co"],
 #home-page-container.hidden {
     display: none !important;
 }
+#dispatch-page-container { display: none !important; }
+#dispatch-page-container.active { display: block !important; }
+#settings-page-container { display: none !important; }
+#settings-page-container.active { display: block !important; }
 """
 
 HEAD_JS = """
@@ -1397,6 +1401,33 @@ HEAD_JS = """
 window.cctvGlobalStream = null;
 window.selectedModelId = 'yolo11n.pt';
 window.currentActiveCamId = 'CAM-01';
+window.cameraDashboardData = {};
+window.alertThresholds = { crowding: 30, overcrowding: 50 };
+try {
+    const savedThresholds = JSON.parse(localStorage.getItem('densitrack-alert-thresholds') || '{}');
+    if (Number.isFinite(savedThresholds.crowding) && Number.isFinite(savedThresholds.overcrowding) && savedThresholds.overcrowding > savedThresholds.crowding) window.alertThresholds = savedThresholds;
+} catch (_) {}
+function isCrowdingCount(count) { return Number(count) > window.alertThresholds.crowding; }
+function isOvercrowdingCount(count) { return Number(count) > window.alertThresholds.overcrowding; }
+function saveAlertThresholds(crowdingValue, overcrowdingValue) {
+    const crowding = Math.max(1, Math.min(100, Number(crowdingValue) || 30));
+    const overcrowding = Math.max(crowding + 1, Math.min(150, Number(overcrowdingValue) || 50));
+    window.alertThresholds = { crowding, overcrowding };
+    try { localStorage.setItem('densitrack-alert-thresholds', JSON.stringify(window.alertThresholds)); } catch (_) {}
+    const crowdSlider = document.getElementById('settings-crowding-threshold');
+    const overSlider = document.getElementById('settings-overcrowding-threshold');
+    const crowdLabel = document.getElementById('settings-crowding-value');
+    const overLabel = document.getElementById('settings-overcrowding-value');
+    if (crowdSlider) crowdSlider.value = crowding;
+    if (overSlider) overSlider.value = overcrowding;
+    if (crowdLabel) crowdLabel.textContent = `Above ${crowding} people`;
+    if (overLabel) overLabel.textContent = `Above ${overcrowding} people`;
+    renderNotificationPanel();
+    renderDispatchZoneDetails(getDispatchSelectedValue());
+}
+function initializeSettingsPage() {
+    saveAlertThresholds(window.alertThresholds.crowding, window.alertThresholds.overcrowding);
+}
 window.analyzedPersonCentroids = [];
 window.heatmapAnalysisComplete = false;
 window.isAnalyzingFeed = false;
@@ -2119,10 +2150,10 @@ function updateHeatmapAndAlertUI(personCount, sourceLabel) {
     let densityPctStr = `${Math.min(96, Math.max(4, personCount * 16))}%`;
     let color = '#22c55e';
 
-    if (personCount >= 6) {
+    if (isOvercrowdingCount(personCount)) {
         densityLevelStr = 'Critical Surge';
         color = '#ef4444';
-    } else if (personCount >= 4) {
+    } else if (isCrowdingCount(personCount)) {
         densityLevelStr = 'High Density';
         color = '#f97316';
     } else if (personCount >= 2) {
@@ -2137,7 +2168,7 @@ function updateHeatmapAndAlertUI(personCount, sourceLabel) {
     }
 
     const camId = window.currentActiveCamId || 'CAM-02';
-    const alertStatus = personCount >= 6 ? 'Critical' : (personCount >= 3 ? 'Warning' : (personCount > 0 ? 'Info' : 'Normal'));
+    const alertStatus = isOvercrowdingCount(personCount) ? 'Critical' : (isCrowdingCount(personCount) ? 'Warning' : (personCount > 0 ? 'Info' : 'Normal'));
     const alertGapMs = personCount > 0 ? 5000 : 20000;
     if (personCount > 0 && (Date.now() - window.lastAlertTime > alertGapMs)) {
         window.lastAlertTime = Date.now();
@@ -2341,6 +2372,8 @@ async function _doOneUploadedFrame() {
         if (modelBadge) modelBadge.innerText = `MODEL: ${window.activeModelId}`;
 
         const personCount = result.count;
+        window.cameraDashboardData[camId] = { count: personCount, updatedAt: Date.now() };
+        renderNotificationPanel();
         const sourceLabel = state.type === 'video' ? 'VIDEO ANALYSIS' : 'IMAGE ANALYSIS';
         const warning = result.warning || 'NORMAL: safe human density';
         const warningLevel = result.warning_level || 'ok';
@@ -2434,6 +2467,8 @@ async function _analyzeActiveFeedYOLOFrame() {
             const result = await callYOLOEndpoint(frameB64, window.selectedModelId || 'yolo11n.pt');
             if ((camId === 'CAM-01' && !window._camRecording) || (camId !== 'CAM-01' && !window._opticalLiveActive) || window.currentActiveCamId !== camId) return;
             personCount = result.count;
+            window.cameraDashboardData[camId] = { count: personCount, updatedAt: Date.now() };
+            renderNotificationPanel();
             centroids = result.centroids || [];
             window.yoloDetectionBoxes = result.boxes || [];
         window.detectedFaceBoxes = result.faces || [];
@@ -2485,10 +2520,10 @@ async function _analyzeActiveFeedYOLOFrame() {
     let densityPctStr = `${Math.min(96, Math.max(4, personCount * 16))}%`;
     let color = '#22c55e';
 
-    if (personCount >= 6) {
+    if (isOvercrowdingCount(personCount)) {
         densityLevelStr = 'Critical Surge';
         color = '#ef4444';
-    } else if (personCount >= 4) {
+    } else if (isCrowdingCount(personCount)) {
         densityLevelStr = 'High Density';
         color = '#f97316';
     } else if (personCount >= 2) {
@@ -2503,9 +2538,9 @@ async function _analyzeActiveFeedYOLOFrame() {
     }
 
     // Trigger incident alert if threshold is breached (debounced to 15s)
-    if (personCount >= 4 && (Date.now() - window.lastAlertTime > 15000)) {
+    if (isCrowdingCount(personCount) && (Date.now() - window.lastAlertTime > 15000)) {
         window.lastAlertTime = Date.now();
-        pushDynamicIncidentAlert(camId, personCount, densityLevelStr, personCount >= 6 ? 'Critical' : 'Warning', 'LIVE ANALYSIS');
+        pushDynamicIncidentAlert(camId, personCount, densityLevelStr, isOvercrowdingCount(personCount) ? 'Critical' : 'Warning', 'LIVE ANALYSIS');
     }
     if (personCount === 0 && camId && document.getElementById('detail-alerts-list')) {
         const pending = document.getElementById('detail-alerts-list').innerText.toLowerCase();
@@ -2559,8 +2594,12 @@ function selectCameraPage(camId) {
     window.currentActiveCamId = camId;
     const homeEl = document.getElementById('home-page-container');
     const detailEl = document.getElementById('cam-detail-page-container');
+    const dispatchEl = document.getElementById('dispatch-page-container');
+    const settingsEl = document.getElementById('settings-page-container');
     if (homeEl) homeEl.classList.add('hidden');
     if (detailEl) detailEl.classList.add('active');
+    if (dispatchEl) dispatchEl.classList.remove('active');
+    if (settingsEl) settingsEl.classList.remove('active');
 
     const cam = window.cctvCameraRegistry ? window.cctvCameraRegistry[camId] : null;
     if (cam) {
@@ -2656,11 +2695,111 @@ window.detectedFaceBoxes = [];
 function returnToHome() {
     const homeEl = document.getElementById('home-page-container');
     const detailEl = document.getElementById('cam-detail-page-container');
+    const dispatchEl = document.getElementById('dispatch-page-container');
+    const settingsEl = document.getElementById('settings-page-container');
     if (homeEl) homeEl.classList.remove('hidden');
     if (detailEl) detailEl.classList.remove('active');
+    if (dispatchEl) dispatchEl.classList.remove('active');
+    if (settingsEl) settingsEl.classList.remove('active');
+    closeAlertDrawer();
     setTimeout(initCam01Webcam, 200);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
+function showSettingsPage() {
+    const home = document.getElementById('home-page-container');
+    const detail = document.getElementById('cam-detail-page-container');
+    const dispatch = document.getElementById('dispatch-page-container');
+    const settings = document.getElementById('settings-page-container');
+    if (home) home.classList.add('hidden');
+    if (detail) detail.classList.remove('active');
+    if (dispatch) dispatch.classList.remove('active');
+    if (settings) settings.classList.add('active');
+    closeAlertDrawer();
+    initializeSettingsPage();
+    window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function escapeDispatchText(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+function renderDispatchZoneDetails(selectedValue) {
+    const panel = document.getElementById('dispatch-zone-assigned-personnel');
+    if (!panel) return;
+    const match = String(selectedValue || '').match(/CAM-\d+/);
+    const camId = match ? match[0] : 'CAM-01';
+    const camera = (window.cctvCameraRegistry || {})[camId] || {id:camId,name:camId,location:'Assigned zone'};
+    const roster = (window.cctvPersonnelStore || {})[camId] || [];
+    const data = (window.cameraDashboardData || {})[camId];
+    const count = data && Number.isFinite(Number(data.count)) ? Number(data.count) : 0;
+    const status = isOvercrowdingCount(count) ? ['OVERCROWDING','#ef4444'] : isCrowdingCount(count) ? ['CROWDING','#f97316'] : count ? ['MONITORING','#60a5fa'] : ['AWAITING DETECTION','#a1a1aa'];
+    const peopleHtml = roster.length ? roster.map((person, index) => `
+        <div style="display:flex;gap:12px;align-items:center;padding:13px;background:#17171e;border:1px solid #2c2c36;border-radius:10px;margin-top:9px">
+          <div style="width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0072f5,#a855f7);color:#fff;font-weight:700">${escapeDispatchText((person.name||'P').trim().charAt(0).toUpperCase())}</div>
+          <div style="min-width:0"><div style="font-size:13px;color:#fff;font-weight:700">${escapeDispatchText(person.name||`Assigned person ${index+1}`)}</div><div style="font-size:11px;color:#93c5fd;margin-top:4px">${escapeDispatchText(person.role||'Zone personnel')}</div><div style="font-size:10px;color:#a1a1aa;margin-top:3px">${escapeDispatchText(person.phone||'No contact number')}</div></div>
+        </div>`).join('') : '<div style="padding:14px;border:1px dashed #3f3f46;border-radius:10px;margin-top:10px;color:#a1a1aa;font-size:12px">No personnel are assigned to this zone yet.</div>';
+    panel.innerHTML = `<div style="padding:18px;background:#111117;border:1px solid #292932;border-radius:14px;color:#f4f4f5;min-height:320px">
+      <div style="font-size:11px;color:#60a5fa;font-weight:700;letter-spacing:.08em">ZONE ASSIGNMENT</div>
+      <div style="font-size:18px;font-weight:750;margin-top:8px">${escapeDispatchText(camera.name||camId)}</div>
+      <div style="font-size:12px;color:#a1a1aa;margin-top:5px">${escapeDispatchText(camera.location||'')}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;padding:12px;background:#191920;border-radius:9px"><span style="font-size:11px;color:#a1a1aa">People detected</span><strong style="font-size:15px;color:#fff">${count}</strong></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding:12px;background:#191920;border-radius:9px"><span style="font-size:11px;color:#a1a1aa">Zone status</span><strong style="font-size:10px;color:${status[1]}">${status[0]}</strong></div>
+      <div style="margin-top:21px;font-size:13px;font-weight:700;color:#fff">Assigned personnel <span style="font-size:11px;color:#71717a">(${roster.length})</span></div>${peopleHtml}
+    </div>`;
+}
+function showDispatchPage() {
+    const home = document.getElementById('home-page-container');
+    const detail = document.getElementById('cam-detail-page-container');
+    const dispatch = document.getElementById('dispatch-page-container');
+    const settings = document.getElementById('settings-page-container');
+    if (home) home.classList.add('hidden');
+    if (detail) detail.classList.remove('active');
+    if (dispatch) dispatch.classList.add('active');
+    if (settings) settings.classList.remove('active');
+    renderDispatchZoneDetails(getDispatchSelectedValue());
+    window.scrollTo({top:0,behavior:'smooth'});
+}
+function getDispatchSelectedValue() {
+    const root = document.getElementById('dispatch-camera-select');
+    if (!root) return 'CAM-01';
+    const control = root.querySelector('select, input, [role="combobox"]');
+    return control ? (control.value || control.getAttribute('aria-valuetext') || control.textContent || 'CAM-01') : root.textContent || 'CAM-01';
+}
+function renderNotificationPanel() {
+    const list = document.getElementById('overcrowding-alert-list');
+    const badge = document.getElementById('alert-bell-count');
+    const alerts = Object.entries(window.cameraDashboardData || {})
+        .filter(([camId, data]) => isOvercrowdingCount(data.count))
+        .sort((a,b) => (b[1].updatedAt||0) - (a[1].updatedAt||0));
+    if (badge) {
+        badge.textContent = String(alerts.length);
+        badge.style.display = alerts.length ? 'flex' : 'none';
+    }
+    if (!list) return;
+    list.innerHTML = alerts.length ? alerts.map(([camId,data]) => `
+      <button onclick="closeAlertDrawer();selectCameraPage('${camId}')" style="width:100%;text-align:left;background:#241316;border:1px solid #7f1d1d;border-radius:10px;padding:12px;margin-bottom:9px;color:#fff;cursor:pointer">
+        <div style="display:flex;justify-content:space-between;align-items:center"><b style="color:#f87171">OVERCROWDING</b><span style="font:11px monospace;color:#a1a1aa">${camId}</span></div>
+        <div style="font-size:13px;margin-top:7px">${Number(data.count)||0} people detected</div>
+        <div style="font-size:10px;color:#a1a1aa;margin-top:4px">Open this camera zone</div>
+      </button>`).join('') : '<div style="padding:18px 12px;text-align:center;color:#a1a1aa;font-size:12px;border:1px dashed #333;border-radius:10px">No active overcrowding alerts.</div>';
+}
+function toggleAlertDrawer() {
+    const home = document.getElementById('home-page-container');
+    const drawer = document.getElementById('overcrowding-alert-drawer');
+    if (!home || home.classList.contains('hidden') || !drawer) return;
+    drawer.style.display = drawer.style.display === 'block' ? 'none' : 'block';
+    renderNotificationPanel();
+}
+function closeAlertDrawer() {
+    const drawer = document.getElementById('overcrowding-alert-drawer');
+    if (drawer) drawer.style.display = 'none';
+}
+document.addEventListener('change', event => {
+    if (event.target && event.target.closest && event.target.closest('#dispatch-camera-select')) renderDispatchZoneDetails(getDispatchSelectedValue());
+});
+setInterval(() => {
+    const page = document.getElementById('dispatch-page-container');
+    if (page && page.classList.contains('active')) renderDispatchZoneDetails(getDispatchSelectedValue());
+}, 1200);
 
 function handleGlowNav(target) {
     document.querySelectorAll('.glow-menu-item').forEach(el => el.classList.remove('active'));
@@ -2670,13 +2809,12 @@ function handleGlowNav(target) {
     if (target === 'home') {
         returnToHome();
     } else if (target === 'notifications') {
-        const el = document.getElementById('section-notifications');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        returnToHome();
+        toggleAlertDrawer();
     } else if (target === 'dispatch') {
-        const el = document.getElementById('section-dispatch');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        showDispatchPage();
     } else if (target === 'settings') {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        showSettingsPage();
     }
 }
 
@@ -3002,16 +3140,6 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                         <span style="color: #ffffff;">Home</span>
                     </a>
                 </li>
-                <!-- Notifications -->
-                <li class="glow-menu-item" id="nav-item-notifications">
-                    <a href="javascript:void(0)" class="glow-menu-link" onclick="handleGlowNav('notifications')">
-                        <span class="glow-pill-backdrop" style="background: radial-gradient(circle, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0) 100%);"></span>
-                        <span class="glow-icon-wrap" style="color: #ffffff;">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-                        </span>
-                        <span style="color: #ffffff;">Notifications</span>
-                    </a>
-                </li>
                 <!-- Dispatch Team -->
                 <li class="glow-menu-item" id="nav-item-dispatch">
                     <a href="javascript:void(0)" class="glow-menu-link" onclick="handleGlowNav('dispatch')">
@@ -3046,6 +3174,20 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
     # PAGE 1: HOME — CCTV Wall & Surveillance Command Center
     # =========================================================
     with gr.Column(visible=True, elem_classes=["visuvate-canvas"], elem_id="home-page-container") as home_view:
+        gr.HTML("""
+        <div style="display:flex;justify-content:flex-end;align-items:center;max-width:1500px;margin:8px auto 10px;padding:0 18px">
+          <button onclick="toggleAlertDrawer()" aria-label="Open notifications" style="position:relative;width:38px;height:38px;border-radius:50%;border:1px solid #34343e;background:#17171d;color:#f4f4f5;display:flex;align-items:center;justify-content:center;cursor:pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
+            <span id="alert-bell-count" style="display:none;position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;border-radius:9px;background:#ef4444;color:white;font:10px sans-serif;align-items:center;justify-content:center;padding:0 4px">0</span>
+          </button>
+        </div>
+        <div id="overcrowding-alert-drawer" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.34)" onclick="if(event.target===this)closeAlertDrawer()">
+          <aside style="position:absolute;right:0;top:0;width:25vw;min-width:300px;max-width:440px;height:100%;box-sizing:border-box;background:#111116;border-left:1px solid #2a2a34;padding:20px;overflow:auto;box-shadow:-18px 0 50px #0008">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 18px"><div><div style="font-size:17px;font-weight:700;color:#fff">Notifications</div><div style="font-size:11px;color:#a1a1aa;margin-top:4px">Crowding alerts by camera zone</div></div><button onclick="closeAlertDrawer()" style="background:#22222a;color:white;border:1px solid #383842;border-radius:6px;padding:5px 9px;cursor:pointer">Close</button></div>
+            <div id="overcrowding-alert-list"></div>
+          </aside>
+        </div>
+        """)
         with gr.Row():
             # -------------------------------------------------
             # LEFT COLUMN: Camera Directory (Sidebar)
@@ -3158,65 +3300,69 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                         </div>
                         """)
 
-        # -----------------------------------------------------
-        # UNDER CCTV GRID: Live Incident & Alert Stream
-        # -----------------------------------------------------
-        gr.HTML("""<div style="height: 1px; background: #1c1c22; margin: 14px 0 10px 0;"></div>""")
-
-        with gr.Column():
-            gr.HTML("""
-            <div id="section-notifications" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; scroll-margin-top: 60px;">
-                <span style="font-size: 14px; font-weight: 700; color: #ffffff;">Live Incident Stream & Dispatch Control</span>
-                <span style="font-size: 11px; color: #71717a;">Active Surveillance Logs</span>
-            </div>
-            """)
-
-            with gr.Row():
-                filter_severity = gr.Dropdown(
-                    label="Filter Severity",
-                    choices=["All", "Critical", "Warning", "Info"],
-                    value="All",
-                    scale=1,
-                )
-                filter_camera = gr.Dropdown(
-                    label="Filter by Camera Source",
-                    choices=["All", "CAM-01", "CAM-02", "CAM-03", "CAM-04"],
-                    value="All",
-                    scale=1,
-                )
-                apply_filter_btn = gr.Button("Apply Filters", scale=1, elem_classes=["btn-visuvate-filter"])
-
-            alerts_table = gr.HTML(value=render_alerts_table_html(INITIAL_ALERTS))
-
-            # Dispatch Team Direct Open Controls
-            gr.HTML("""
-            <div id="section-dispatch" style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px; margin-bottom: 8px; scroll-margin-top: 60px;">
-                <span style="font-size: 13px; font-weight: 700; color: #ffffff;">Dispatch Team</span>
-                <span style="font-size: 11px; color: #71717a;">Direct Incident Communication & Security Directives</span>
-            </div>
-            """)
-            with gr.Group():
-                with gr.Row():
+    with gr.Column(visible=True, elem_classes=["visuvate-canvas"], elem_id="dispatch-page-container") as dispatch_view:
+        gr.HTML("""
+        <div style="max-width:1320px;margin:18px auto 14px;padding:0 18px;display:flex;justify-content:space-between;align-items:center;gap:16px">
+          <div><div style="font-size:22px;font-weight:750;color:#fff">Dispatch Team</div><div style="font-size:12px;color:#a1a1aa;margin-top:5px">Send zone specific directions and review assigned personnel.</div></div>
+        </div>
+        """)
+        with gr.Row(equal_height=False):
+            with gr.Column(scale=3, min_width=360):
+                with gr.Group():
                     dispatch_cam = gr.Dropdown(
-                        label="Target Camera / Incident Area",
+                        label="Target Camera / Zone",
                         choices=[f"{c['id']} - {c['name']}" for c in INITIAL_CAMERAS],
                         value=f"{INITIAL_CAMERAS[0]['id']} - {INITIAL_CAMERAS[0]['name']}",
-                        scale=1,
+                        elem_id="dispatch-camera-select",
                     )
                     dispatch_severity = gr.Dropdown(
                         label="Alert Urgency",
                         choices=["Critical", "Warning", "Info"],
                         value="Critical",
-                        scale=1,
                     )
                     dispatch_msg = gr.Textbox(
                         label="Incident Directive / Instructions",
                         value="Immediate attention required! Deploy crowd dispersion barriers at exit gate.",
-                        scale=2,
+                        lines=5,
                     )
-                with gr.Row():
-                    send_alert_btn = gr.Button("Send Alert", elem_classes=["btn-visuvate-alert"])
-                dispatch_status_box = gr.Markdown(value="", visible=True)
+                    send_alert_btn = gr.Button("Send Dispatch Alert", elem_classes=["btn-visuvate-alert"])
+                    dispatch_status_box = gr.Markdown(value="", visible=True)
+            with gr.Column(scale=2, min_width=330):
+                dispatch_zone_details = gr.HTML(
+                    value='<div style="padding:18px;background:#111117;border:1px solid #292932;border-radius:14px;color:#a1a1aa">Select a zone to view its assigned personnel.</div>',
+                    elem_id="dispatch-zone-assigned-personnel",
+                )
+
+        gr.HTML("""<div style="height:1px;background:#292932;margin:22px 18px 14px"></div>""")
+        with gr.Column():
+            gr.HTML("""
+            <div id="section-notifications" style="display:flex;justify-content:space-between;align-items:center;margin:0 18px 8px;scroll-margin-top:60px">
+              <span style="font-size:16px;font-weight:700;color:#fff">Live Incident Stream &amp; Dispatch Control</span>
+              <span style="font-size:11px;color:#71717a">Active Surveillance Logs</span>
+            </div>
+            """)
+            with gr.Row():
+                filter_severity = gr.Dropdown(label="Filter Severity", choices=["All", "Critical", "Warning", "Info"], value="All", scale=1)
+                filter_camera = gr.Dropdown(label="Filter by Camera Source", choices=["All"] + [c['id'] for c in INITIAL_CAMERAS], value="All", scale=1)
+                apply_filter_btn = gr.Button("Apply Filters", scale=1, elem_classes=["btn-visuvate-filter"])
+            alerts_table = gr.HTML(value=render_alerts_table_html(INITIAL_ALERTS))
+
+    gr.HTML("""
+    <div id="settings-page-container" style="max-width:1050px;margin:20px auto;padding:24px;background:#101015;border:1px solid #292932;border-radius:16px;color:#f4f4f5;min-height:65vh;box-sizing:border-box">
+      <div style="border-bottom:1px solid #2c2c35;padding-bottom:18px;margin-bottom:22px"><div style="font-size:22px;font-weight:750">Alert Settings</div><div style="font-size:12px;color:#a1a1aa;margin-top:5px">Set the people-count limits used for crowding and overcrowding alerts.</div></div>
+      <div style="max-width:760px;padding:18px;background:#16161d;border:1px solid #292933;border-radius:12px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><div style="font-size:14px;font-weight:700;color:#fb923c">Crowding threshold</div><div style="font-size:11px;color:#a1a1aa;margin-top:4px">Warning status begins above this count.</div></div><strong id="settings-crowding-value" style="color:#fdba74;white-space:nowrap">Above 30 people</strong></div>
+        <input id="settings-crowding-threshold" type="range" min="1" max="100" value="30" oninput="saveAlertThresholds(this.value,document.getElementById('settings-overcrowding-threshold').value)" style="width:100%;margin-top:18px;accent-color:#f97316">
+        <div style="display:flex;justify-content:space-between;color:#71717a;font-size:10px"><span>1 person</span><span>100 people</span></div>
+      </div>
+      <div style="max-width:760px;padding:18px;background:#16161d;border:1px solid #292933;border-radius:12px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><div style="font-size:14px;font-weight:700;color:#f87171">Overcrowding threshold</div><div style="font-size:11px;color:#a1a1aa;margin-top:4px">Critical status and bell alerts begin above this count.</div></div><strong id="settings-overcrowding-value" style="color:#fca5a5;white-space:nowrap">Above 50 people</strong></div>
+        <input id="settings-overcrowding-threshold" type="range" min="2" max="150" value="50" oninput="saveAlertThresholds(document.getElementById('settings-crowding-threshold').value,this.value)" style="width:100%;margin-top:18px;accent-color:#ef4444">
+        <div style="display:flex;justify-content:space-between;color:#71717a;font-size:10px"><span>2 people</span><span>150 people</span></div>
+      </div>
+      <div style="max-width:760px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 2px;color:#a1a1aa;font-size:11px"><span>Changes save automatically in this browser.</span><button onclick="saveAlertThresholds(30,50)" style="background:#1c1c24;color:#d4d4d8;border:1px solid #373742;border-radius:7px;padding:7px 10px;cursor:pointer">Reset defaults</button></div>
+    </div>
+    """)
 
     # =========================================================
     # PAGE 2: DEDICATED CAMERA VIEW PAGE
@@ -3342,7 +3488,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
 
     demo.load(
         fn=None,
-        js="() => { console.log('[DensiTrack] App ready. YOLO endpoint at /yolo_predict'); }"
+        js="() => { console.log('[DensiTrack] App ready. YOLO endpoint at /yolo_predict'); initializeSettingsPage(); renderNotificationPanel(); renderDispatchZoneDetails(getDispatchSelectedValue()); }"
     )
 
 
