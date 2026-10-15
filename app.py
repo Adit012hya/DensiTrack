@@ -617,6 +617,7 @@ def render_camera_detail_full_html(cam=None, alerts=None):
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>
                 Back to Home
             </button>
+            <button id="delete-current-camera-btn" onclick="deleteCurrentCamera()" style="display:none;align-items:center;gap:6px;background:#7f1d1d;color:#fff;border:1px solid #b91c1c;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">Delete Camera</button>
             <div>
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <span id="detail-cam-title" style="font-size: 16px; font-weight: 700; color: #ffffff;">{cam.get('name', 'Camera View')}</span>
@@ -783,15 +784,15 @@ def render_camera_detail_full_html(cam=None, alerts=None):
                     <div style="font-size: 11px; text-transform: uppercase; color: #ffffff; font-weight: 700; letter-spacing: 0.5px;">
                         Personnel Allotted in Area
                     </div>
-                    <button id="btn-personnel-edit" onclick="toggleAddPersonnelForm()" style="background: #181822; color: #ffffff; border: none; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                    <button id="btn-personnel-edit" onclick="toggleAddPersonnelForm()" style="background: #0072f5; color: #ffffff; border: none; border-radius: 6px; padding: 5px 10px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px;">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                        Edit
+                        Add Person
                     </button>
                 </div>
 
                 <!-- Edit / Add Personnel Form (Name, Position, Contact No) -->
                 <div id="add-personnel-form" style="display: none; background: #16161e; border-radius: 8px; padding: 10px; margin-bottom: 8px;">
-                    <div style="font-size: 11px; color: #ffffff; font-weight: 600; margin-bottom: 6px;">Add Officer:</div>
+                    <div id="personnel-form-title" style="font-size: 11px; color: #ffffff; font-weight: 600; margin-bottom: 6px;">Add Assigned Person</div>
                     <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;">
                         <input id="input-personnel-name" type="text" placeholder="Officer Name" style="background: #0d0d12; border: 1px solid #23232c; border-radius: 6px; padding: 6px 8px; font-size: 11px; color: #ffffff; outline: none;" />
                         <input id="input-personnel-phone" type="text" placeholder="Contact No (+91 98402 11029)" style="background: #0d0d12; border: 1px solid #23232c; border-radius: 6px; padding: 6px 8px; font-size: 11px; color: #ffffff; outline: none;" />
@@ -804,8 +805,8 @@ def render_camera_detail_full_html(cam=None, alerts=None):
                         </select>
                     </div>
                     <div style="display: flex; justify-content: flex-end; gap: 6px;">
-                        <button onclick="toggleAddPersonnelForm()" style="background: #202028; color: #ffffff; border: none; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;">Cancel</button>
-                        <button onclick="submitAddPersonnel()" style="background: #0072f5; color: #ffffff; border: none; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;">Add</button>
+                        <button onclick="cancelPersonnelEdit()" style="background: #202028; color: #ffffff; border: none; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;">Cancel</button>
+                        <button id="personnel-submit-btn" onclick="submitAddPersonnel()" style="background: #0072f5; color: #ffffff; border: none; padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;">Add Person</button>
                     </div>
                 </div>
 
@@ -1061,6 +1062,7 @@ html, body {
 .dashboard-camera-placeholder { position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:#08080bcc;color:#f4f4f5;text-align:center;font-size:12px;pointer-events:none }
 .dashboard-camera-placeholder span { color:#a1a1aa;font-size:10px }
 .dashboard-camera-count { position:absolute;left:8px;top:7px;background:#050508bb;border:1px solid #3333;border-radius:5px;padding:3px 7px;font:10px monospace;pointer-events:none }
+.camera-action-bridge { position:fixed !important;left:-10000px !important;top:0 !important;width:1px !important;height:1px !important;min-width:1px !important;min-height:1px !important;opacity:0 !important;overflow:hidden !important;pointer-events:none !important; }
 
 /* Eradicate Gradio Image Toolbar & HUD Controls (▶, 🔍, ✋, 1X, 🌙, 🔲) */
 .gradio-container .image-toolbar,
@@ -1536,20 +1538,59 @@ function onModelChanged(modelVal) {
 // Personnel Management (Add / Delete / Edit)
 // -------------------------------------------------------------
 window.isEditPersonnelMode = false;
+window.editingPersonnelIndex = null;
 
 function toggleAddPersonnelForm() {
-    window.isEditPersonnelMode = !window.isEditPersonnelMode;
+    window.editingPersonnelIndex = null;
+    window.isEditPersonnelMode = true;
     const form = document.getElementById('add-personnel-form');
-    if (form) {
-        form.style.display = window.isEditPersonnelMode ? 'block' : 'none';
-    }
-    const editBtn = document.getElementById('btn-personnel-edit');
-    if (editBtn) {
-        editBtn.style.background = window.isEditPersonnelMode ? '#0072f5' : '#181822';
-    }
-    document.querySelectorAll('.personnel-delete-btn').forEach(btn => {
-        btn.style.display = window.isEditPersonnelMode ? 'flex' : 'none';
-    });
+    const name = document.getElementById('input-personnel-name');
+    const phone = document.getElementById('input-personnel-phone');
+    if (name) name.value = '';
+    if (phone) phone.value = '';
+    const title = document.getElementById('personnel-form-title');
+    const submit = document.getElementById('personnel-submit-btn');
+    if (title) title.textContent = 'Add Assigned Person';
+    if (submit) submit.textContent = 'Add Person';
+    if (form) form.style.display = form.style.display === 'block' ? 'none' : 'block';
+}
+function editPersonnel(index) {
+    const camId = window.currentActiveCamId || 'CAM-01';
+    const person = (window.cctvPersonnelStore[camId] || [])[index];
+    if (!person) return;
+    window.editingPersonnelIndex = index;
+    window.isEditPersonnelMode = true;
+    const form = document.getElementById('add-personnel-form');
+    const name = document.getElementById('input-personnel-name');
+    const phone = document.getElementById('input-personnel-phone');
+    const role = document.getElementById('input-personnel-role');
+    const title = document.getElementById('personnel-form-title');
+    const submit = document.getElementById('personnel-submit-btn');
+    if (name) name.value = person.name || '';
+    if (phone) phone.value = person.phone || '';
+    if (role) role.value = person.role || 'Crowd Control Lead';
+    if (title) title.textContent = 'Edit Assigned Person';
+    if (submit) submit.textContent = 'Save Changes';
+    if (form) form.style.display = 'block';
+}
+function cancelPersonnelEdit() {
+    window.editingPersonnelIndex = null;
+    window.isEditPersonnelMode = false;
+    const form = document.getElementById('add-personnel-form');
+    if (form) form.style.display = 'none';
+}
+
+function renderDispatchAssignmentsClient() {
+    const root = document.getElementById('dispatch-camera-assignments');
+    if (!root) return;
+    const cameras = Object.values(window.cctvCameraRegistry || {}).sort((a,b) => String(a.name || '').localeCompare(String(b.name || '')));
+    const rows = cameras.map(camera => {
+        const people = window.cctvPersonnelStore[camera.id] || [];
+        const names = people.length ? people.map(person => escapeDispatchText(person.name || 'Assigned person')).join(', ') : 'No assigned personnel';
+        const roles = people.length ? people.map(person => escapeDispatchText(person.role || 'Zone personnel')).join(', ') : '—';
+        return `<div style="display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(160px,1fr) minmax(150px,1fr);gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #292932"><div><div style="color:#fff;font-size:12px;font-weight:700">${escapeDispatchText(camera.name || camera.id)}</div><div style="color:#71717a;font-size:10px;margin-top:3px">${escapeDispatchText(camera.id)}</div></div><div style="color:#d4d4d8;font-size:12px">${names}</div><div style="color:#93c5fd;font-size:11px">${roles}</div></div>`;
+    }).join('');
+    root.innerHTML = `<div style="overflow:auto;background:#111117;border:1px solid #292932;border-radius:12px"><div style="display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(160px,1fr) minmax(150px,1fr);gap:12px;padding:10px 14px;background:#191920;color:#a1a1aa;font-size:10px;text-transform:uppercase;letter-spacing:.06em"><span>Camera (A to Z)</span><span>Assigned team member</span><span>Role</span></div>${rows || '<div style="padding:14px;color:#a1a1aa">No cameras have been deployed.</div>'}</div>`;
 }
 
 function renderPersonnelList() {
@@ -1559,14 +1600,15 @@ function renderPersonnelList() {
 
     const roster = window.cctvPersonnelStore[camId] || [];
     if (roster.length === 0) {
-        listEl.innerHTML = '<div style="padding: 12px; background: #16161c; border-radius: 8px; text-align: center; color: #a1a1aa; font-size: 11px;">No personnel currently allotted. Click Edit to add officers.</div>';
+        listEl.innerHTML = '<div style="padding: 12px; background: #16161c; border-radius: 8px; text-align: center; color: #a1a1aa; font-size: 11px;">No personnel currently assigned. Click Add Person to assign a team member.</div>';
         return;
     }
 
-    const delDisplay = window.isEditPersonnelMode ? 'flex' : 'none';
-
     listEl.innerHTML = roster.map((p, idx) => {
-        const init = p.name ? p.name.trim()[0].toUpperCase() : 'O';
+        const safeName = escapeDispatchText(p.name || 'Officer');
+        const safeRole = escapeDispatchText(p.role || 'Zone personnel');
+        const safePhone = escapeDispatchText(p.phone || 'No contact number');
+        const init = safeName.trim()[0].toUpperCase();
         const phoneStr = p.phone ? ` • Ph: ${p.phone}` : '';
         return `
         <div class="personnel-card" data-idx="${idx}" style="display: flex; align-items: center; justify-content: space-between; background: #16161c; border-radius: 8px; padding: 8px 10px; transition: border-color 0.2s ease;">
@@ -1576,15 +1618,13 @@ function renderPersonnelList() {
                 </div>
                 <div style="overflow: hidden;">
                     <div style="font-size: 12px; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 5px;">
-                        <span style="color: #ffffff;">${p.name}</span>
+                        <span style="color: #ffffff;">${safeName}</span>
                         <span style="width: 5px; height: 5px; border-radius: 50%; background: #22c55e;"></span>
                     </div>
-                    <div style="font-size: 10px; color: #93c5fd; font-weight: 500;">${p.role}${phoneStr}</div>
+                    <div style="font-size: 10px; color: #93c5fd; font-weight: 500;">${safeRole} / ${safePhone}</div>
                 </div>
             </div>
-            <button class="personnel-delete-btn" onclick="deletePersonnel(${idx})" title="Delete Officer from Area" style="display: ${delDisplay}; background: transparent; border: none; color: #a1a1aa; cursor: pointer; padding: 4px; border-radius: 4px; align-items: center; justify-content: center;" onmouseover="this.style.color='#ef4444'" onmouseout="this.style.color='#a1a1aa'">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            </button>
+            <div style="display:flex;gap:4px;flex-shrink:0"><button onclick="editPersonnel(${idx})" title="Edit assigned person" style="background:#202028;color:#93c5fd;border:1px solid #383842;border-radius:5px;padding:4px 7px;font-size:10px;cursor:pointer">Edit</button><button onclick="deletePersonnel(${idx})" title="Delete assigned person" style="background:transparent;color:#f87171;border:1px solid #553136;border-radius:5px;padding:4px 7px;font-size:10px;cursor:pointer">Delete</button></div>
         </div>
         `;
     }).join('');
@@ -1607,16 +1647,19 @@ function submitAddPersonnel() {
     if (!window.cctvPersonnelStore[camId]) {
         window.cctvPersonnelStore[camId] = [];
     }
-    window.cctvPersonnelStore[camId].push({ 
-        name: name, 
-        role: role,
-        phone: phone || '+91 98402 11029'
-    });
+    const record = {name, role, phone: phone || 'No contact number'};
+    if (Number.isInteger(window.editingPersonnelIndex) && window.cctvPersonnelStore[camId][window.editingPersonnelIndex]) {
+        window.cctvPersonnelStore[camId][window.editingPersonnelIndex] = record;
+    } else {
+        window.cctvPersonnelStore[camId].push(record);
+    }
 
     if (nameInput) nameInput.value = '';
     if (phoneInput) phoneInput.value = '';
-    toggleAddPersonnelForm();
+    cancelPersonnelEdit();
     renderPersonnelList();
+    renderDispatchAssignmentsClient();
+    renderDispatchZoneDetails(getDispatchSelectedValue());
 }
 
 function deletePersonnel(idx) {
@@ -1625,6 +1668,8 @@ function deletePersonnel(idx) {
     if (idx >= 0 && idx < roster.length) {
         roster.splice(idx, 1);
         renderPersonnelList();
+        renderDispatchAssignmentsClient();
+        renderDispatchZoneDetails(getDispatchSelectedValue());
     }
 }
 
@@ -2160,7 +2205,7 @@ function renderExtraDashboardTiles() {
     if (!host) return;
     const builtIn = new Set(['CAM-01','CAM-02','CAM-03','CAM-04']);
     const extra = Object.values(window.cctvCameraRegistry || {}).filter(camera => !builtIn.has(camera.id)).sort((a,b) => String(a.name).localeCompare(String(b.name)));
-    host.innerHTML = extra.length ? `<div style="font-size:13px;font-weight:700;color:#fff;margin:16px 4px 8px">Additional Camera Feeds</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px">${extra.map(camera => `<div class="cctv-quad-card" style="position:relative"><button onclick="event.stopPropagation();deleteCameraById('${escapeDispatchText(camera.id)}')" title="Delete ${escapeDispatchText(camera.name)}" style="position:absolute;right:8px;top:8px;z-index:4;background:#7f1d1d;color:#fff;border:1px solid #b91c1c;border-radius:6px;padding:4px 8px;font-size:10px;font-weight:700;cursor:pointer">Delete camera</button><div class="cctv-quad-header" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><span style="padding-right:82px">${escapeDispatchText(camera.name)}</span><span style="color:#a1a1aa;font-size:10px">${escapeDispatchText(camera.id)}</span></div><div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><canvas id="dashboard-camera-canvas-${escapeDispatchText(camera.id)}" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-${escapeDispatchText(camera.id)}" class="dashboard-camera-placeholder"><b>${escapeDispatchText(camera.id)} FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-${escapeDispatchText(camera.id)}">0 PEOPLE</span></div></div></div>`).join('')}</div>` : '';
+    host.innerHTML = extra.length ? `<div style="font-size:13px;font-weight:700;color:#fff;margin:16px 4px 8px">Additional Camera Feeds</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px">${extra.map(camera => `<div class="cctv-quad-card"><div class="cctv-quad-header" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><span>${escapeDispatchText(camera.name)}</span><span style="color:#a1a1aa;font-size:10px">${escapeDispatchText(camera.id)}</span></div><div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><canvas id="dashboard-camera-canvas-${escapeDispatchText(camera.id)}" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-${escapeDispatchText(camera.id)}" class="dashboard-camera-placeholder"><b>${escapeDispatchText(camera.id)} FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-${escapeDispatchText(camera.id)}">0 PEOPLE</span></div></div></div>`).join('')}</div>` : '';
 }
 function syncCameraRegistryFromPython(rawValue) {
     try {
@@ -2178,6 +2223,8 @@ function syncCameraRegistryFromPython(rawValue) {
                 const state = window.uploadedMediaByCam[camId];
                 if (state.videoEl) { state.videoEl.pause(); state.videoEl.src = ''; }
                 delete window.uploadedMediaByCam[camId];
+                delete window.cctvPersonnelStore[camId];
+                delete window.cameraDashboardData[camId];
             }
         });
         window.cctvCameraRegistry = nextRegistry;
@@ -2188,7 +2235,12 @@ function syncCameraRegistryFromPython(rawValue) {
         });
         renderExtraDashboardTiles();
         renderAllDashboardCameraTiles();
+        renderDispatchAssignmentsClient();
         renderDispatchZoneDetails(getDispatchSelectedValue());
+        if (!nextRegistry[window.currentActiveCamId]) {
+            window.currentActiveCamId = Object.keys(nextRegistry)[0] || 'CAM-01';
+            returnToHome();
+        }
     } catch (error) { console.error('Could not sync camera assignments', error); }
 }
 function startDashboardPreviewLoop() {
@@ -2735,6 +2787,8 @@ function selectCameraPage(camId) {
 
     const cam = window.cctvCameraRegistry ? window.cctvCameraRegistry[camId] : null;
     if (cam) {
+        const deleteCameraButton = document.getElementById('delete-current-camera-btn');
+        if (deleteCameraButton) deleteCameraButton.style.display = ['CAM-01','CAM-02','CAM-03','CAM-04'].includes(cam.id) ? 'none' : 'inline-flex';
         const titleEl = document.getElementById('detail-cam-title');
         if (titleEl) titleEl.innerText = cam.name;
         const idBadge = document.getElementById('detail-cam-id-badge');
@@ -2934,25 +2988,21 @@ window.closeAlertDrawer = function() {
     if (drawer) drawer.style.display = 'none';
 };
 function deleteCameraById(camId) {
-    const root = document.getElementById('delete-camera-select');
-    const button = document.querySelector('#delete-camera-button button');
-    if (!root || !button) { console.error('Camera delete control is unavailable'); return; }
-    const choice = Array.from(root.querySelectorAll('[role="option"]')).find(option => option.textContent.trim().startsWith(`${camId} -`));
-    if (choice) { choice.click(); setTimeout(() => button.click(), 80); return; }
-    const select = root.querySelector('select');
-    if (select) {
-        const option = Array.from(select.options).find(item => item.value.startsWith(`${camId} -`));
-        if (option) { select.value = option.value; select.dispatchEvent(new Event('input', {bubbles:true})); select.dispatchEvent(new Event('change', {bubbles:true})); setTimeout(() => button.click(), 80); return; }
-    }
-    const input = root.querySelector('input');
-    if (input) {
-        input.focus(); input.value = camId;
-        input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:camId}));
-        setTimeout(() => {
-            const option = Array.from(document.querySelectorAll('[role="option"]')).find(item => item.textContent.trim().startsWith(`${camId} -`));
-            if (option) { option.click(); setTimeout(() => button.click(), 80); }
-        }, 120);
-    }
+    const root = document.getElementById('selected-cam-input');
+    const input = root && (root.matches('input,textarea') ? root : root.querySelector('input,textarea'));
+    const buttonRoot = document.getElementById('selected-cam-trigger');
+    const button = buttonRoot && (buttonRoot.matches('button') ? buttonRoot : buttonRoot.querySelector('button'));
+    if (!input || !button) { console.error('Camera page delete action is unavailable'); return; }
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')?.set;
+    if (setter) setter.call(input, camId); else input.value = camId;
+    input.dispatchEvent(new Event('input', {bubbles:true}));
+    input.dispatchEvent(new Event('change', {bubbles:true}));
+    setTimeout(() => button.click(), 40);
+}
+function deleteCurrentCamera() {
+    const camId = window.currentActiveCamId;
+    if (!camId || ['CAM-01','CAM-02','CAM-03','CAM-04'].includes(camId)) return;
+    deleteCameraById(camId);
 }
 document.addEventListener('change', event => {
     if (event.target && event.target.closest && event.target.closest('#dispatch-camera-select')) renderDispatchZoneDetails(getDispatchSelectedValue());
@@ -3340,8 +3390,8 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
     """)
 
     # Hidden JS-to-Python Bridge Inputs for Page Switching
-    hidden_selected_cam = gr.Textbox(elem_id="selected-cam-input", visible=False)
-    hidden_cam_trigger = gr.Button(elem_id="selected-cam-trigger", visible=False)
+    hidden_selected_cam = gr.Textbox(value="", elem_id="selected-cam-input", elem_classes=["camera-action-bridge"], visible=True)
+    hidden_cam_trigger = gr.Button("Delete Camera Action", elem_id="selected-cam-trigger", elem_classes=["camera-action-bridge"], visible=True)
     hidden_home_trigger = gr.Button(elem_id="nav-to-home-trigger", visible=False)
     camera_registry_sync = gr.Textbox(value=json.dumps(INITIAL_CAMERAS), visible=False, elem_id="camera-registry-sync")
 
@@ -3490,7 +3540,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
         gr.HTML("""<div style="height:1px;background:#292932;margin:22px 18px 14px"></div>""")
         with gr.Column():
             gr.HTML("""<div style="font-size:16px;font-weight:700;color:#fff;margin:0 18px 8px">Camera Team Assignments</div><div style="font-size:11px;color:#a1a1aa;margin:0 18px 10px">Assigned personnel listed by camera name, A to Z.</div>""")
-            dispatch_assignments = gr.HTML(value=render_dispatch_assignments_html(INITIAL_CAMERAS))
+            dispatch_assignments = gr.HTML(value=render_dispatch_assignments_html(INITIAL_CAMERAS), elem_id="dispatch-camera-assignments")
         gr.HTML("""<div style="height:1px;background:#292932;margin:22px 18px 14px"></div>""")
         with gr.Column():
             gr.HTML("""
@@ -3636,6 +3686,13 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
         outputs=[camera_store, camera_sidebar, dispatch_cam, filter_camera, add_cam_status, alert_store, alerts_table, delete_cam_select, dispatch_assignments, camera_registry_sync],
     )
     delete_camera_event.then(fn=None, js="(cameraJson) => { if (typeof syncCameraRegistryFromPython === 'function') syncCameraRegistryFromPython(cameraJson); return []; }", inputs=[camera_registry_sync], outputs=[])
+
+    detail_delete_event = hidden_cam_trigger.click(
+        fn=handle_delete_camera,
+        inputs=[hidden_selected_cam, camera_store, alert_store],
+        outputs=[camera_store, camera_sidebar, dispatch_cam, filter_camera, add_cam_status, alert_store, alerts_table, delete_cam_select, dispatch_assignments, camera_registry_sync],
+    )
+    detail_delete_event.then(fn=None, js="(cameraJson) => { if (typeof syncCameraRegistryFromPython === 'function') syncCameraRegistryFromPython(cameraJson); return []; }", inputs=[camera_registry_sync], outputs=[])
 
     # 4. Filter Alerts
     def handle_filter_alerts(severity, cam_id, alerts):
