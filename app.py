@@ -629,7 +629,7 @@ def render_camera_detail_full_html(cam=None, alerts=None):
         </div>
 
         <div id="media-upload-bar" style="display: none; align-items: center; gap: 8px; margin-top: 10px; width: 100%; justify-content: flex-end; flex-wrap: wrap;">
-            <input id="media-upload-input" type="file" accept="video/*" style="display: none;" />
+            <input id="media-upload-input" type="file" accept="video/*,image/*" style="display: none;" />
             <button id="media-upload-btn" onclick="triggerMediaUpload()" style="background: linear-gradient(135deg, #0072f5, #2563eb); color: #ffffff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 11px; font-weight: 700; cursor: pointer;">Upload Video</button>
             <button id="media-remove-btn" onclick="removeUploadedMedia()" style="display: none; background: linear-gradient(135deg, #7f1d1d, #991b1b); color: #ffffff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 11px; font-weight: 700; cursor: pointer;">✕ Remove Video</button>
             <button id="media-analyze-btn" onclick="startUploadedMediaAnalysisLoop()" style="display: none; background: linear-gradient(135deg, #16a34a, #15803d); color: #ffffff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 11px; font-weight: 700; cursor: pointer;">▶ Analyse Video</button>
@@ -1043,6 +1043,9 @@ html, body {
     color: #71717a;
     margin-top: 3px;
 }
+.dashboard-camera-placeholder { position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:#08080bcc;color:#f4f4f5;text-align:center;font-size:12px;pointer-events:none }
+.dashboard-camera-placeholder span { color:#a1a1aa;font-size:10px }
+.dashboard-camera-count { position:absolute;left:8px;top:7px;background:#050508bb;border:1px solid #3333;border-radius:5px;padding:3px 7px;font:10px monospace;pointer-events:none }
 
 /* Eradicate Gradio Image Toolbar & HUD Controls (▶, 🔍, ✋, 1X, 🌙, 🔲) */
 .gradio-container .image-toolbar,
@@ -1402,6 +1405,8 @@ window.cctvGlobalStream = null;
 window.selectedModelId = 'yolo11n.pt';
 window.currentActiveCamId = 'CAM-01';
 window.cameraDashboardData = {};
+window.uploadedMediaByCam = {};
+window.dashboardAnalysisBusy = false;
 window.alertThresholds = { crowding: 30, overcrowding: 50 };
 try {
     const savedThresholds = JSON.parse(localStorage.getItem('densitrack-alert-thresholds') || '{}');
@@ -2089,6 +2094,81 @@ function renderUploadedMediaToCanvas() {
     drawUploadedDetectionOverlay(window.yoloDetectionBoxes || [], window.lastZoneCounts, window.analyzedPersonCentroids);
 }
 
+function heatColor(count) {
+    return Number(count) > 50 ? '#ef4444' : Number(count) > 30 ? '#f97316' : Number(count) > 1 ? '#facc15' : '#3b82f6';
+}
+function drawDashboardCameraTile(camId) {
+    const canvas = document.getElementById(`dashboard-camera-canvas-${camId}`);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const state = window.uploadedMediaByCam[camId];
+    let source = state && (state.videoEl || state.imgEl);
+    if (!source && camId === 'CAM-01') source = document.getElementById('cctv-live-video');
+    if (!source && camId === 'CAM-02' && window._opticalLiveActive) source = document.getElementById('optical-live-video');
+    const ready = source && (source.tagName === 'VIDEO' ? source.readyState >= 2 && source.videoWidth : source.complete && source.naturalWidth);
+    ctx.fillStyle = '#050508'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const placeholder = document.getElementById(`dashboard-camera-placeholder-${camId}`);
+    if (ready) {
+        try {
+            const sw = source.videoWidth || source.naturalWidth, sh = source.videoHeight || source.naturalHeight;
+            const scale = Math.max(canvas.width / sw, canvas.height / sh);
+            const dw = sw * scale, dh = sh * scale;
+            ctx.drawImage(source, (canvas.width-dw)/2, (canvas.height-dh)/2, dw, dh);
+            if (placeholder) placeholder.style.display = 'none';
+        } catch (_) { if (placeholder) placeholder.style.display = 'flex'; }
+    } else if (placeholder) placeholder.style.display = 'flex';
+
+    const data = window.cameraDashboardData[camId] || {};
+    const boxes = data.boxes || [];
+    const count = Number(data.count) || 0;
+    boxes.forEach((box, i) => {
+        const x = Number(box.x1 || 0) * canvas.width, y = Number(box.y1 || 0) * canvas.height;
+        const w = (Number(box.x2 || 0) - Number(box.x1 || 0)) * canvas.width;
+        const h = (Number(box.y2 || 0) - Number(box.y1 || 0)) * canvas.height;
+        const dot = heatColor(Math.max(count, boxes.length));
+        ctx.save(); ctx.shadowColor = dot; ctx.shadowBlur = 18;
+        ctx.beginPath(); ctx.arc(x + w/2, y + h/2, 9, 0, Math.PI*2); ctx.fillStyle = dot; ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.restore();
+        ctx.strokeStyle = dot; ctx.lineWidth = 2; ctx.strokeRect(x,y,w,h);
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 11px sans-serif'; ctx.fillText(`P${i+1}`, x, Math.max(13,y-4));
+    });
+    const countEl = document.getElementById(`dashboard-camera-count-${camId}`);
+    if (countEl) { countEl.textContent = `${count} PEOPLE`; countEl.style.color = heatColor(count); }
+}
+function renderAllDashboardCameraTiles() {
+    ['CAM-01','CAM-02','CAM-03','CAM-04'].forEach(drawDashboardCameraTile);
+}
+function startDashboardPreviewLoop() {
+    if (window.dashboardPreviewFrame) return;
+    const tick = () => { renderAllDashboardCameraTiles(); window.dashboardPreviewFrame = requestAnimationFrame(tick); };
+    window.dashboardPreviewFrame = requestAnimationFrame(tick);
+}
+async function analyzeDashboardFeeds() {
+    if (window.dashboardAnalysisBusy || document.hidden) return;
+    const cams = ['CAM-01','CAM-02','CAM-03','CAM-04'];
+    const camId = cams[window.dashboardAnalysisIndex = ((window.dashboardAnalysisIndex || 0) + 1) % cams.length];
+    const state = window.uploadedMediaByCam[camId];
+    let source = state ? (state.videoEl || state.imgEl) : null;
+    if (!source && camId === 'CAM-01') source = document.getElementById('cctv-live-video');
+    if (!source && camId === 'CAM-02' && window._opticalLiveActive) source = document.getElementById('optical-live-video');
+    if (!source) return;
+    const ready = source.tagName === 'VIDEO' ? source.readyState >= 2 && source.videoWidth : source.complete && source.naturalWidth;
+    if (!ready) return;
+    window.dashboardAnalysisBusy = true;
+    try {
+        const frame = await captureFrameBase64(source, 0.7);
+        if (!frame) return;
+        const result = await callYOLOEndpoint(frame, window.selectedModelId || 'yolo11n.pt');
+        if (!result || typeof result.count !== 'number') return;
+        window.cameraDashboardData[camId] = {count:result.count, boxes:result.boxes||[], centroids:result.centroids||[], zoneCounts:result.zone_counts||{}, updatedAt:Date.now()};
+        renderNotificationPanel(); renderAllDashboardCameraTiles();
+    } catch (error) { console.warn('Dashboard camera analysis failed', camId, error); }
+    finally { window.dashboardAnalysisBusy = false; }
+}
+setInterval(analyzeDashboardFeeds, 900);
+
 function drawUploadedDetectionOverlay(boxes, zoneCounts, centroids) {
     const canvas = document.getElementById('cctv-optical-stream-canvas');
     if (!canvas) return;
@@ -2195,14 +2275,14 @@ function syncMediaActionButtons() {
     const bar = document.getElementById('media-upload-bar');
     if (!analyzeBtn || !uploadBtn || !bar) return;
 
-    const isUploadCam = camId === 'CAM-02' || camId === 'CAM-03';
+    const isUploadCam = true;
     bar.style.display = isUploadCam ? 'flex' : 'none';
     uploadBtn.style.display = 'inline-flex';
-    uploadBtn.innerText = camId === 'CAM-02' ? 'Upload Video' : (camId === 'CAM-03' ? 'Upload Image' : 'Upload Video');
+    uploadBtn.innerText = 'Upload Video / Image';
 
     const showAnalyze = isUploadCam;
     analyzeBtn.style.display = showAnalyze ? 'inline-flex' : 'none';
-    analyzeBtn.innerText = camId === 'CAM-02' ? 'Analyze Video' : (camId === 'CAM-03' ? 'Analyze Image' : 'Analyze Now');
+    analyzeBtn.innerText = 'Analyze Feed';
 }
 
 function setMediaUploadMode(camId) {
@@ -2212,24 +2292,13 @@ function setMediaUploadMode(camId) {
     const analyzeBtn = document.getElementById('media-analyze-btn');
     if (!bar || !btn || !input) return;
 
-    if (camId === 'CAM-02') {
+    {
         bar.style.display = 'flex';
         btn.style.display = 'inline-flex';
-        btn.innerText = 'Upload Video';
-        input.accept = 'video/*';
+        btn.innerText = 'Upload Video / Image';
+        input.accept = 'video/*,image/*';
         input.multiple = false;
-        if (analyzeBtn) analyzeBtn.innerText = 'Analyze Video';
-    } else if (camId === 'CAM-03') {
-        bar.style.display = 'flex';
-        btn.style.display = 'inline-flex';
-        btn.innerText = 'Upload Image';
-        input.accept = 'image/*';
-        input.multiple = false;
-        if (analyzeBtn) analyzeBtn.innerText = 'Analyze Image';
-    } else {
-        bar.style.display = 'none';
-        btn.style.display = 'none';
-        if (analyzeBtn) analyzeBtn.style.display = 'none';
+        if (analyzeBtn) analyzeBtn.innerText = 'Analyze Feed';
     }
     syncMediaActionButtons();
 }
@@ -2243,21 +2312,26 @@ async function handleUploadedMediaSelection(event) {
     // Stop any running analysis first
     if (window._uploadAnalysisTimer) { clearInterval(window._uploadAnalysisTimer); window._uploadAnalysisTimer = null; }
 
-    if (camId === 'CAM-02') {
+    if (file.type.startsWith('video/')) {
         const video = document.createElement('video');
-        video.src = URL.createObjectURL(file);
         video.muted = true;
         video.loop = true;
         video.playsInline = true;
         video.preload = 'auto';
         video.onloadeddata = () => {
-            window.uploadedMediaState = { camId, file, type: 'video', videoEl: video, imgEl: null, frameB64: null };
+            const state = { camId, file, type: 'video', videoEl: video, imgEl: null, frameB64: null };
+            window.uploadedMediaByCam[camId] = state;
+            window.uploadedMediaState = state;
             window.analyzedPersonCentroids = [];
             window.yoloDetectionBoxes = [];
 window.detectedFaceBoxes = [];
             window.lastZoneCounts = {zone1:0,zone2:0,zone3:0,zone4:0};
             window.heatmapAnalysisComplete = false;
             video.play().catch(() => {});
+            const webcamBox = document.getElementById('cam-detail-webcam-box');
+            const opticalBox = document.getElementById('cam-detail-optical-box');
+            if (webcamBox) webcamBox.style.display = 'none';
+            if (opticalBox) opticalBox.style.display = 'flex';
             // Render first frame on canvas (no analysis yet)
             renderUploadedMediaToCanvas();
             // Show Remove & Analyse buttons
@@ -2269,13 +2343,17 @@ window.detectedFaceBoxes = [];
             runHeatmapCompositeAnimation();
             // Start detection as soon as the uploaded clip is ready.
             startUploadedMediaAnalysisLoop();
+            renderAllDashboardCameraTiles();
         };
-    } else if (camId === 'CAM-03') {
+        video.src = URL.createObjectURL(file);
+    } else if (file.type.startsWith('image/')) {
         const image = new Image();
         image.onload = function() {
             const reader = new FileReader();
             reader.onload = function() {
-                window.uploadedMediaState = { camId, file, type: 'image', imgEl: image, videoEl: null, frameB64: String(reader.result).split(',')[1] };
+                const state = { camId, file, type: 'image', imgEl: image, videoEl: null, frameB64: String(reader.result).split(',')[1] };
+                window.uploadedMediaByCam[camId] = state;
+                window.uploadedMediaState = state;
                 window.analyzedPersonCentroids = [];
                 window.yoloDetectionBoxes = [];
 window.detectedFaceBoxes = [];
@@ -2288,11 +2366,12 @@ window.detectedFaceBoxes = [];
                 if (analyzeBtn) { analyzeBtn.style.display = 'inline-flex'; analyzeBtn.innerText = '▶ Analyse Image'; }
                 runHeatmapCompositeAnimation();
                 startUploadedMediaAnalysisLoop();
+                renderAllDashboardCameraTiles();
             };
             reader.readAsDataURL(file);
         };
         image.src = URL.createObjectURL(file);
-    }
+    } else { alert('Choose a video or image file.'); }
 
     event.target.value = '';
 }
@@ -2307,6 +2386,7 @@ function removeUploadedMedia() {
         state.videoEl.pause();
         state.videoEl.src = '';
     }
+    if (state) delete window.uploadedMediaByCam[state.camId];
     window.uploadedMediaState = null;
     window.analyzedPersonCentroids = [];
     window.yoloDetectionBoxes = [];
@@ -2331,6 +2411,7 @@ window.detectedFaceBoxes = [];
     if (chokepointVal) { chokepointVal.innerText = 'Standby'; chokepointVal.style.color = '#a1a1aa'; }
     // Heatmap canvas shows idle again
     runHeatmapCompositeAnimation();
+    renderAllDashboardCameraTiles();
 }
 
 // ── Continuous uploaded-media analysis loop ─────────────────────────────────
@@ -2372,7 +2453,7 @@ async function _doOneUploadedFrame() {
         if (modelBadge) modelBadge.innerText = `MODEL: ${window.activeModelId}`;
 
         const personCount = result.count;
-        window.cameraDashboardData[camId] = { count: personCount, updatedAt: Date.now() };
+        window.cameraDashboardData[camId] = { count: personCount, boxes: result.boxes || [], centroids: result.centroids || [], zoneCounts: result.zone_counts || {}, updatedAt: Date.now() };
         renderNotificationPanel();
         const sourceLabel = state.type === 'video' ? 'VIDEO ANALYSIS' : 'IMAGE ANALYSIS';
         const warning = result.warning || 'NORMAL: safe human density';
@@ -2635,12 +2716,12 @@ function selectCameraPage(camId) {
 
         const webcamBox = document.getElementById('cam-detail-webcam-box');
         const opticalBox = document.getElementById('cam-detail-optical-box');
-        if (cam.id === 'CAM-01') {
+        const activeUpload = window.uploadedMediaByCam[cam.id] || null;
+        window.uploadedMediaState = activeUpload;
+        if (cam.id === 'CAM-01' && !activeUpload) {
             if (webcamBox) webcamBox.style.display = 'flex';
             if (opticalBox) opticalBox.style.display = 'none';
-            // CAM-01: hide upload bar, reset recording state
-            const bar = document.getElementById('media-upload-bar');
-            if (bar) bar.style.display = 'none';
+            setMediaUploadMode(cam.id);
             // Do NOT auto-start webcam — user clicks Start Recording
             window._camRecording = false;
             const btnStart = document.getElementById('btn-start-recording');
@@ -2652,22 +2733,20 @@ function selectCameraPage(camId) {
         } else {
             if (webcamBox) webcamBox.style.display = 'none';
             if (opticalBox) opticalBox.style.display = 'flex';
-            // Show the upload bar for CAM-02/03
-            const bar = document.getElementById('media-upload-bar');
-            if (bar) bar.style.display = 'flex';
+            setMediaUploadMode(cam.id);
             const input = document.getElementById('media-upload-input');
             if (input) {
-                input.accept = cam.id === 'CAM-03' ? 'image/*' : 'video/*';
+                input.accept = 'video/*,image/*';
                 input.onchange = handleUploadedMediaSelection;
             }
             const uploadBtn  = document.getElementById('media-upload-btn');
             const removeBtn  = document.getElementById('media-remove-btn');
             const analyzeBtn = document.getElementById('media-analyze-btn');
-            if (uploadBtn)  uploadBtn.innerText = cam.id === 'CAM-03' ? 'Upload Image' : 'Upload Video';
+            if (uploadBtn)  uploadBtn.innerText = 'Upload Video / Image';
             // Hide Remove/Analyse until a file is loaded
             if (removeBtn)  removeBtn.style.display  = 'none';
             if (analyzeBtn) analyzeBtn.style.display = 'none';
-            if (!window.uploadedMediaState || window.uploadedMediaState.camId !== cam.id) {
+            if (!activeUpload) {
                 window.uploadedMediaState = null;
                 window.analyzedPersonCentroids = [];
                 window.yoloDetectionBoxes = [];
@@ -2684,6 +2763,12 @@ window.detectedFaceBoxes = [];
                 if (removeBtn)  removeBtn.style.display  = 'inline-flex';
                 if (analyzeBtn) analyzeBtn.style.display = 'inline-flex';
                 runHeatmapCompositeAnimation();
+                if (activeUpload.type === 'video') activeUpload.videoEl.play().catch(() => {});
+                startUploadedMediaAnalysisLoop();
+            }
+            if (cam.id === 'CAM-01' && activeUpload) {
+                if (webcamBox) webcamBox.style.display = 'none';
+                if (opticalBox) opticalBox.style.display = 'flex';
             }
         }
     }
@@ -2701,8 +2786,12 @@ function returnToHome() {
     if (detailEl) detailEl.classList.remove('active');
     if (dispatchEl) dispatchEl.classList.remove('active');
     if (settingsEl) settingsEl.classList.remove('active');
+    const active = window.uploadedMediaByCam[window.currentActiveCamId];
+    if (active) window.uploadedMediaState = active;
+    startDashboardPreviewLoop();
+    renderAllDashboardCameraTiles();
     closeAlertDrawer();
-    setTimeout(initCam01Webcam, 200);
+    if (!window.uploadedMediaByCam['CAM-01']) setTimeout(initCam01Webcam, 200);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function showSettingsPage() {
@@ -2783,9 +2872,8 @@ function renderNotificationPanel() {
       </button>`).join('') : '<div style="padding:18px 12px;text-align:center;color:#a1a1aa;font-size:12px;border:1px dashed #333;border-radius:10px">No active overcrowding alerts.</div>';
 }
 function toggleAlertDrawer() {
-    const home = document.getElementById('home-page-container');
     const drawer = document.getElementById('overcrowding-alert-drawer');
-    if (!home || home.classList.contains('hidden') || !drawer) return;
+    if (!drawer) return;
     drawer.style.display = drawer.style.display === 'block' ? 'none' : 'block';
     renderNotificationPanel();
 }
@@ -2822,12 +2910,18 @@ function handleGlowNav(target) {
 window.addEventListener('DOMContentLoaded', () => { 
     const uploadInput = document.getElementById('media-upload-input');
     if (uploadInput) uploadInput.onchange = handleUploadedMediaSelection;
+    const drawer = document.getElementById('overcrowding-alert-drawer');
+    if (drawer) document.body.appendChild(drawer);
+    startDashboardPreviewLoop();
     renderPersonnelList();
     // DO NOT auto-start webcam — requires Start Recording button
 });
 window.addEventListener('load', () => { 
     const uploadInput = document.getElementById('media-upload-input');
     if (uploadInput) uploadInput.onchange = handleUploadedMediaSelection;
+    const drawer = document.getElementById('overcrowding-alert-drawer');
+    if (drawer && drawer.parentElement !== document.body) document.body.appendChild(drawer);
+    startDashboardPreviewLoop();
     renderPersonnelList();
 });
 
@@ -3063,19 +3157,15 @@ function runHeatmapAnimation() {
 
 // Live optical canvas updates — now with zone grid overlay
 function runOpticalCanvasAnimation() {
-    if (window.uploadedMediaState && ['CAM-02', 'CAM-03'].includes(window.currentActiveCamId || 'CAM-02')) {
-        renderUploadedMediaToCanvas();
-        return;
-    }
-
     const canvas = document.getElementById('cctv-optical-stream-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     function animateOptical() {
-        if (window.uploadedMediaState && ['CAM-02', 'CAM-03'].includes(window.currentActiveCamId || 'CAM-02')) {
+        if (window.uploadedMediaState && window.uploadedMediaState.camId === window.currentActiveCamId) {
             renderUploadedMediaToCanvas();
+            window.opticalAnimationFrame = requestAnimationFrame(animateOptical);
             return;
         }
         if (!document.getElementById('cctv-optical-stream-canvas')) return;
@@ -3160,6 +3250,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                         <span style="color: #ffffff;">Settings</span>
                     </a>
                 </li>
+                <li class="glow-menu-item" id="nav-item-notifications"><button onclick="toggleAlertDrawer()" aria-label="Open notifications" title="Notifications" style="position:relative;width:36px;height:36px;margin:0 5px;border:1px solid #34343e;border-radius:50%;background:#17171d;color:#f4f4f5;display:flex;align-items:center;justify-content:center;cursor:pointer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg><span id="alert-bell-count" style="display:none;position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;border-radius:9px;background:#ef4444;color:white;font:10px sans-serif;align-items:center;justify-content:center;padding:0 4px">0</span></button></li>
             </ul>
         </nav>
     </div>
@@ -3175,12 +3266,6 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
     # =========================================================
     with gr.Column(visible=True, elem_classes=["visuvate-canvas"], elem_id="home-page-container") as home_view:
         gr.HTML("""
-        <div style="display:flex;justify-content:flex-end;align-items:center;max-width:1500px;margin:8px auto 10px;padding:0 18px">
-          <button onclick="toggleAlertDrawer()" aria-label="Open notifications" style="position:relative;width:38px;height:38px;border-radius:50%;border:1px solid #34343e;background:#17171d;color:#f4f4f5;display:flex;align-items:center;justify-content:center;cursor:pointer">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
-            <span id="alert-bell-count" style="display:none;position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;border-radius:9px;background:#ef4444;color:white;font:10px sans-serif;align-items:center;justify-content:center;padding:0 4px">0</span>
-          </button>
-        </div>
         <div id="overcrowding-alert-drawer" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.34)" onclick="if(event.target===this)closeAlertDrawer()">
           <aside style="position:absolute;right:0;top:0;width:25vw;min-width:300px;max-width:440px;height:100%;box-sizing:border-box;background:#111116;border-left:1px solid #2a2a34;padding:20px;overflow:auto;box-shadow:-18px 0 50px #0008">
             <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 18px"><div><div style="font-size:17px;font-weight:700;color:#fff">Notifications</div><div style="font-size:11px;color:#a1a1aa;margin-top:4px">Crowding alerts by camera zone</div></div><button onclick="closeAlertDrawer()" style="background:#22222a;color:white;border:1px solid #383842;border-radius:6px;padding:5px 9px;cursor:pointer">Close</button></div>
@@ -3238,6 +3323,8 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                         </div>
                         <div style="position: relative; width: 100%; height: 160px; background: #09090b; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid #202026; cursor: pointer;" onclick="selectCameraPage('CAM-01')">
                             <video id="cctv-live-video" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; display: none;"></video>
+                            <canvas id="dashboard-camera-canvas-CAM-01" width="640" height="360" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none"></canvas>
+                            <div style="position:absolute;left:9px;top:8px;background:#050508bb;border-radius:5px;padding:3px 7px;font:10px monospace;z-index:2"><span id="dashboard-camera-count-CAM-01">0 PEOPLE</span></div>
                             
                             <div id="cctv-webcam-placeholder" style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; cursor: pointer; width: 100%; height: 100%; padding: 12px; text-align: center;" onclick="event.stopPropagation(); initCam01Webcam();">
                                 <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(0, 114, 245, 0.2); border: 1px solid rgba(0, 114, 245, 0.5); display: flex; align-items: center; justify-content: center; color: #0072f5; box-shadow: 0 0 16px rgba(0, 114, 245, 0.25);">
@@ -3263,11 +3350,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                             <span style="font-weight: 600; color: #a1a1aa;">CAM 02 — SECTOR 3 CONCOURSE</span>
                             <span style="color: #71717a; font-size: 10px;">STANDBY</span>
                         </div>
-                        <div class="cctv-plus-slot" onclick="selectCameraPage('CAM-02')" style="cursor: pointer;">
-                            <div class="plus-sign">+</div>
-                            <div class="plus-label">View Camera Feed</div>
-                            <div class="plus-sub">Click to inspect optical feed & crowd density</div>
-                        </div>
+                        <div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('CAM-02')"><canvas id="dashboard-camera-canvas-CAM-02" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-CAM-02" class="dashboard-camera-placeholder"><b>CAM 02 FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-CAM-02">0 PEOPLE</span></div></div>
                         """)
 
                 # QUADRANTS 3 & 4 (Bottom Row)
@@ -3279,11 +3362,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                             <span style="font-weight: 600; color: #a1a1aa;">CAM 03 — WEST PROMENADE</span>
                             <span style="color: #71717a; font-size: 10px;">STANDBY</span>
                         </div>
-                        <div class="cctv-plus-slot" onclick="selectCameraPage('CAM-03')" style="cursor: pointer;">
-                            <div class="plus-sign">+</div>
-                            <div class="plus-label">View Camera Feed</div>
-                            <div class="plus-sub">Click to inspect optical feed & crowd density</div>
-                        </div>
+                        <div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('CAM-03')"><canvas id="dashboard-camera-canvas-CAM-03" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-CAM-03" class="dashboard-camera-placeholder"><b>CAM 03 FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-CAM-03">0 PEOPLE</span></div></div>
                         """)
 
                     # Quadrant 4: CAM 04 Slot
@@ -3293,11 +3372,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                             <span style="font-weight: 600; color: #a1a1aa;">CAM 04 — QUEUE CORRIDOR</span>
                             <span style="color: #71717a; font-size: 10px;">STANDBY</span>
                         </div>
-                        <div class="cctv-plus-slot" onclick="selectCameraPage('CAM-04')" style="cursor: pointer;">
-                            <div class="plus-sign">+</div>
-                            <div class="plus-label">View Camera Feed</div>
-                            <div class="plus-sub">Click to inspect optical feed & crowd density</div>
-                        </div>
+                        <div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('CAM-04')"><canvas id="dashboard-camera-canvas-CAM-04" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-CAM-04" class="dashboard-camera-placeholder"><b>CAM 04 FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-CAM-04">0 PEOPLE</span></div></div>
                         """)
 
     with gr.Column(visible=True, elem_classes=["visuvate-canvas"], elem_id="dispatch-page-container") as dispatch_view:
