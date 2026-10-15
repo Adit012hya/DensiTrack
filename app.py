@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import datetime
 import importlib.util
+import html as html_lib
 import os
 import socket
 import tempfile
@@ -541,6 +542,20 @@ def render_camera_sidebar_html(cameras, active_cam_id=None):
         {''.join(items)}
     </div>
     """
+
+
+def render_dispatch_assignments_html(cameras):
+    sorted_cameras = sorted(cameras, key=lambda cam: (cam.get("name", "").casefold(), cam.get("id", "")))
+    if not sorted_cameras:
+        return '<div style="padding:14px;color:#a1a1aa">No cameras have been deployed.</div>'
+    rows = []
+    for cam in sorted_cameras:
+        rows.append(f'''<div style="display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(160px,1fr) minmax(150px,1fr);gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid #292932">
+          <div><div style="color:#fff;font-size:12px;font-weight:700">{html_lib.escape(str(cam.get("name", cam.get("id", "Camera"))))}</div><div style="color:#71717a;font-size:10px;margin-top:3px">{html_lib.escape(str(cam.get("id", "")))}</div></div>
+          <div style="color:#d4d4d8;font-size:12px">{html_lib.escape(str(cam.get("assigned_name", "Duty Officer")))}</div>
+          <div style="color:#93c5fd;font-size:11px">{html_lib.escape(str(cam.get("assigned_role", "Zone personnel")))}</div>
+        </div>''')
+    return '<div style="overflow:auto;background:#111117;border:1px solid #292932;border-radius:12px"><div style="display:grid;grid-template-columns:minmax(180px,1.2fr) minmax(160px,1fr) minmax(150px,1fr);gap:12px;padding:10px 14px;background:#191920;color:#a1a1aa;font-size:10px;text-transform:uppercase;letter-spacing:.06em"><span>Camera (A to Z)</span><span>Assigned team member</span><span>Role</span></div>' + ''.join(rows) + '</div>'
 
 
 def render_camera_detail_full_html(cam=None, alerts=None):
@@ -2138,7 +2153,43 @@ function drawDashboardCameraTile(camId) {
     if (countEl) { countEl.textContent = `${count} PEOPLE`; countEl.style.color = heatColor(count); }
 }
 function renderAllDashboardCameraTiles() {
-    ['CAM-01','CAM-02','CAM-03','CAM-04'].forEach(drawDashboardCameraTile);
+    Object.keys(window.cctvCameraRegistry || {}).forEach(drawDashboardCameraTile);
+}
+function renderExtraDashboardTiles() {
+    const host = document.getElementById('extra-camera-tiles');
+    if (!host) return;
+    const builtIn = new Set(['CAM-01','CAM-02','CAM-03','CAM-04']);
+    const extra = Object.values(window.cctvCameraRegistry || {}).filter(camera => !builtIn.has(camera.id)).sort((a,b) => String(a.name).localeCompare(String(b.name)));
+    host.innerHTML = extra.length ? `<div style="font-size:13px;font-weight:700;color:#fff;margin:16px 4px 8px">Additional Camera Feeds</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px">${extra.map(camera => `<div class="cctv-quad-card"><div class="cctv-quad-header" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><span>${escapeDispatchText(camera.name)}</span><span style="color:#a1a1aa;font-size:10px">${escapeDispatchText(camera.id)}</span></div><div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('${escapeDispatchText(camera.id)}')"><canvas id="dashboard-camera-canvas-${escapeDispatchText(camera.id)}" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-${escapeDispatchText(camera.id)}" class="dashboard-camera-placeholder"><b>${escapeDispatchText(camera.id)} FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-${escapeDispatchText(camera.id)}">0 PEOPLE</span></div></div></div>`).join('')}</div>` : '';
+}
+function syncCameraRegistryFromPython(rawValue) {
+    try {
+        const cameras = JSON.parse(rawValue || '[]');
+        const nextRegistry = {};
+        cameras.forEach(camera => {
+            const previous = window.cctvCameraRegistry[camera.id] || {};
+            nextRegistry[camera.id] = Object.assign({}, previous, camera);
+            if (!window.cctvPersonnelStore[camera.id] || !window.cctvPersonnelStore[camera.id].length) {
+                window.cctvPersonnelStore[camera.id] = [{name:camera.assigned_name || 'Duty Officer', role:camera.assigned_role || 'Zone personnel', phone:camera.assigned_phone || 'No contact number'}];
+            }
+        });
+        Object.keys(window.uploadedMediaByCam).forEach(camId => {
+            if (!nextRegistry[camId]) {
+                const state = window.uploadedMediaByCam[camId];
+                if (state.videoEl) { state.videoEl.pause(); state.videoEl.src = ''; }
+                delete window.uploadedMediaByCam[camId];
+            }
+        });
+        window.cctvCameraRegistry = nextRegistry;
+        ['CAM-01','CAM-02','CAM-03','CAM-04'].forEach(camId => {
+            const canvas = document.getElementById(`dashboard-camera-canvas-${camId}`);
+            const card = canvas && canvas.closest('.cctv-quad-card');
+            if (card) card.style.display = nextRegistry[camId] ? '' : 'none';
+        });
+        renderExtraDashboardTiles();
+        renderAllDashboardCameraTiles();
+        renderDispatchZoneDetails(getDispatchSelectedValue());
+    } catch (error) { console.error('Could not sync camera assignments', error); }
 }
 function startDashboardPreviewLoop() {
     if (window.dashboardPreviewFrame) return;
@@ -3250,16 +3301,23 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                         <span style="color: #ffffff;">Settings</span>
                     </a>
                 </li>
-                <li class="glow-menu-item" id="nav-item-notifications"><button onclick="toggleAlertDrawer()" aria-label="Open notifications" title="Notifications" style="position:relative;width:36px;height:36px;margin:0 5px;border:1px solid #34343e;border-radius:50%;background:#17171d;color:#f4f4f5;display:flex;align-items:center;justify-content:center;cursor:pointer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg><span id="alert-bell-count" style="display:none;position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;border-radius:9px;background:#ef4444;color:white;font:10px sans-serif;align-items:center;justify-content:center;padding:0 4px">0</span></button></li>
             </ul>
         </nav>
     </div>
+    """)
+
+    gr.HTML("""
+    <button id="global-notification-bell" onclick="toggleAlertDrawer()" aria-label="Open notifications" title="Notifications" style="position:fixed;top:16px;right:20px;z-index:10002;width:42px;height:42px;border:1px solid #41414d;border-radius:50%;background:#17171d;color:#f4f4f5;box-shadow:0 5px 22px #0009;display:flex;align-items:center;justify-content:center;cursor:pointer">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
+      <span id="alert-bell-count" style="display:none;position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;border-radius:9px;background:#ef4444;color:white;font:10px sans-serif;align-items:center;justify-content:center;padding:0 4px">0</span>
+    </button>
     """)
 
     # Hidden JS-to-Python Bridge Inputs for Page Switching
     hidden_selected_cam = gr.Textbox(elem_id="selected-cam-input", visible=False)
     hidden_cam_trigger = gr.Button(elem_id="selected-cam-trigger", visible=False)
     hidden_home_trigger = gr.Button(elem_id="nav-to-home-trigger", visible=False)
+    camera_registry_sync = gr.Textbox(value=json.dumps(INITIAL_CAMERAS), visible=False, elem_id="camera-registry-sync")
 
     # =========================================================
     # PAGE 1: HOME — CCTV Wall & Surveillance Command Center
@@ -3295,7 +3353,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                         choices=["IP / RTSP Stream", "PTZ Dome Optical", "System Hardware Webcam", "Simulated Video Feed"],
                         value="IP / RTSP Stream",
                     )
-                    new_cam_personnel = gr.Textbox(label="Designated Officer", placeholder="Officer K. Verma")
+                    new_cam_personnel = gr.Textbox(label="Designated Officer", value="Duty Officer", placeholder="Officer K. Verma")
                     new_cam_role = gr.Dropdown(
                         label="Operational Role",
                         choices=["Crowd Control Lead", "Perimeter Security Officer", "Medical First Responder", "Emergency Dispatch Commander", "Sector Supervisor"],
@@ -3303,6 +3361,8 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                     )
                     add_cam_btn = gr.Button("Add Camera to Canvas", variant="primary", elem_classes=["btn-visuvate-filter"])
                     add_cam_status = gr.Markdown(value="", visible=True)
+                    delete_cam_select = gr.Dropdown(label="Camera to remove", choices=[f"{c['id']} - {c['name']}" for c in INITIAL_CAMERAS], value=f"{INITIAL_CAMERAS[0]['id']} - {INITIAL_CAMERAS[0]['name']}")
+                    delete_cam_btn = gr.Button("Delete Selected Camera", variant="stop")
 
             # -------------------------------------------------
             # CENTER / RIGHT: Compact CCTV Canvas Wall (Square Quad Grid)
@@ -3374,6 +3434,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                         </div>
                         <div style="position:relative;height:165px;margin:6px;border:1px solid #202026;border-radius:8px;overflow:hidden;background:#050508;cursor:pointer" onclick="selectCameraPage('CAM-04')"><canvas id="dashboard-camera-canvas-CAM-04" width="640" height="360" style="width:100%;height:100%;object-fit:cover"></canvas><div id="dashboard-camera-placeholder-CAM-04" class="dashboard-camera-placeholder"><b>CAM 04 FEED</b><span>Upload a video or image to preview and analyze</span></div><div class="dashboard-camera-count"><span id="dashboard-camera-count-CAM-04">0 PEOPLE</span></div></div>
                         """)
+                gr.HTML('<div id="extra-camera-tiles"></div>')
 
     with gr.Column(visible=True, elem_classes=["visuvate-canvas"], elem_id="dispatch-page-container") as dispatch_view:
         gr.HTML("""
@@ -3408,6 +3469,10 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
                     elem_id="dispatch-zone-assigned-personnel",
                 )
 
+        gr.HTML("""<div style="height:1px;background:#292932;margin:22px 18px 14px"></div>""")
+        with gr.Column():
+            gr.HTML("""<div style="font-size:16px;font-weight:700;color:#fff;margin:0 18px 8px">Camera Team Assignments</div><div style="font-size:11px;color:#a1a1aa;margin:0 18px 10px">Assigned personnel listed by camera name, A to Z.</div>""")
+            dispatch_assignments = gr.HTML(value=render_dispatch_assignments_html(INITIAL_CAMERAS))
         gr.HTML("""<div style="height:1px;background:#292932;margin:22px 18px 14px"></div>""")
         with gr.Column():
             gr.HTML("""
@@ -3458,17 +3523,22 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
     # 3. Add New Camera
     def handle_add_camera(name, location, ctype, officer, role, current_cameras, current_alerts):
         if not name or not location:
+            choices = [f"{c['id']} - {c['name']}" for c in sorted(current_cameras, key=lambda cam: (cam.get('name', '').casefold(), cam.get('id', '')))]
             return (
                 current_cameras,
                 render_camera_sidebar_html(current_cameras),
-                gr.update(choices=[f"{c['id']} - {c['name']}" for c in current_cameras]),
+                gr.update(choices=choices),
                 gr.update(choices=["All"] + [c['id'] for c in current_cameras]),
                 "⚠️ Please provide both Camera Name and Monitored Zone.",
                 current_alerts,
                 render_alerts_table_html(current_alerts),
+                gr.update(choices=choices, value=choices[0] if choices else None),
+                render_dispatch_assignments_html(current_cameras),
+                json.dumps(current_cameras),
             )
 
-        new_id = f"CAM-0{len(current_cameras) + 1}"
+        next_number = max([int(cam['id'].split('-')[-1]) for cam in current_cameras if cam.get('id', '').startswith('CAM-') and cam['id'].split('-')[-1].isdigit()] or [0]) + 1
+        new_id = f"CAM-{next_number:02d}"
         new_entry = {
             "id": new_id,
             "name": name.strip(),
@@ -3494,7 +3564,7 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
         }
         updated_alerts = [new_alert] + current_alerts
 
-        cam_choices = [f"{c['id']} - {c['name']}" for c in updated_cameras]
+        cam_choices = [f"{c['id']} - {c['name']}" for c in sorted(updated_cameras, key=lambda cam: (cam.get('name', '').casefold(), cam.get('id', '')))]
         filter_choices = ["All"] + [c['id'] for c in updated_cameras]
 
         msg = f"✅ **{name}** ({new_id}) successfully registered on Canvas and mapped to **{officer}**!"
@@ -3506,13 +3576,48 @@ with gr.Blocks(title="DensiTrack — Real-Time CCTV Command Studio") as demo:
             msg,
             updated_alerts,
             render_alerts_table_html(updated_alerts),
+            gr.update(choices=cam_choices, value=f"{new_id} - {name.strip()}"),
+            render_dispatch_assignments_html(updated_cameras),
+            json.dumps(updated_cameras),
         )
 
-    add_cam_btn.click(
+    add_camera_event = add_cam_btn.click(
         fn=handle_add_camera,
         inputs=[new_cam_name, new_cam_location, new_cam_type, new_cam_personnel, new_cam_role, camera_store, alert_store],
-        outputs=[camera_store, camera_sidebar, dispatch_cam, filter_camera, add_cam_status, alert_store, alerts_table],
+        outputs=[camera_store, camera_sidebar, dispatch_cam, filter_camera, add_cam_status, alert_store, alerts_table, delete_cam_select, dispatch_assignments, camera_registry_sync],
     )
+    add_camera_event.then(fn=None, js="(cameraJson) => { if (typeof syncCameraRegistryFromPython === 'function') syncCameraRegistryFromPython(cameraJson); return []; }", inputs=[camera_registry_sync], outputs=[])
+
+    def handle_delete_camera(target_cam, current_cameras, current_alerts):
+        cam_id = str(target_cam or "").split(" - ", 1)[0]
+        if not cam_id or not any(camera["id"] == cam_id for camera in current_cameras):
+            remaining, message = current_cameras, "Select a camera to delete."
+        elif len(current_cameras) <= 1:
+            remaining, message = current_cameras, "At least one camera must remain deployed."
+        else:
+            remaining = [camera for camera in current_cameras if camera["id"] != cam_id]
+            message = f"Camera {cam_id} was removed."
+            current_alerts = [alert for alert in current_alerts if alert.get("camera_id") != cam_id]
+        choices = [f"{camera['id']} - {camera['name']}" for camera in sorted(remaining, key=lambda cam: (cam.get('name', '').casefold(), cam.get('id', '')))]
+        return (
+            remaining,
+            render_camera_sidebar_html(remaining),
+            gr.update(choices=choices, value=choices[0] if choices else None),
+            gr.update(choices=["All"] + [camera["id"] for camera in remaining], value="All"),
+            message,
+            current_alerts,
+            render_alerts_table_html(current_alerts),
+            gr.update(choices=choices, value=choices[0] if choices else None),
+            render_dispatch_assignments_html(remaining),
+            json.dumps(remaining),
+        )
+
+    delete_camera_event = delete_cam_btn.click(
+        fn=handle_delete_camera,
+        inputs=[delete_cam_select, camera_store, alert_store],
+        outputs=[camera_store, camera_sidebar, dispatch_cam, filter_camera, add_cam_status, alert_store, alerts_table, delete_cam_select, dispatch_assignments, camera_registry_sync],
+    )
+    delete_camera_event.then(fn=None, js="(cameraJson) => { if (typeof syncCameraRegistryFromPython === 'function') syncCameraRegistryFromPython(cameraJson); return []; }", inputs=[camera_registry_sync], outputs=[])
 
     # 4. Filter Alerts
     def handle_filter_alerts(severity, cam_id, alerts):
